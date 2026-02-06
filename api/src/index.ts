@@ -94,6 +94,7 @@ app.get('/', (c) => {
       'GET /resolutions/pending': 'List upcoming resolutions + challenge windows',
       'POST /markets': 'Create a new market (authority only)',
       'POST /markets/:id/bet': 'Place a bet (returns unsigned tx to sign)',
+      'POST /markets/:id/claim': 'Claim winnings after resolution (returns unsigned tx)',
       'POST /markets/:id/resolve': 'Resolve market (authority only)',
     },
   });
@@ -503,6 +504,139 @@ app.get('/markets/:id/verify', async (c) => {
   } catch (error) {
     console.error('Error verifying market:', error);
     return c.json({ error: 'Market not found' }, 404);
+  }
+});
+
+// Claim winnings (for winners after resolution)
+app.post('/markets/:id/claim', async (c) => {
+  const marketId = c.req.param('id');
+  
+  try {
+    const body = await c.req.json();
+    const { claimerPubkey, signedTx } = body;
+    
+    // Get market pubkey
+    let marketPubkey: PublicKey;
+    try {
+      marketPubkey = new PublicKey(marketId);
+    } catch {
+      const [pda] = PublicKey.findProgramAddressSync(
+        [Buffer.from('market'), Buffer.from(marketId)],
+        programId
+      );
+      marketPubkey = pda;
+    }
+    
+    // If signed tx provided, submit it
+    if (signedTx) {
+      const txBuffer = Buffer.from(signedTx, 'base64');
+      const sig = await connection.sendRawTransaction(txBuffer);
+      await connection.confirmTransaction(sig, 'confirmed');
+      
+      return c.json({
+        success: true,
+        txSignature: sig,
+      });
+    }
+    
+    // Otherwise, build unsigned tx for agent to sign
+    if (!claimerPubkey) {
+      return c.json({ 
+        error: 'Missing required field: claimerPubkey (or signedTx)' 
+      }, 400);
+    }
+    
+    const claimer = new PublicKey(claimerPubkey);
+    
+    // Check if market is resolved first
+    const market = await program.account.market.fetch(marketPubkey);
+    if (!market.resolved) {
+      return c.json({ 
+        error: 'Market not yet resolved. Cannot claim until resolution.',
+        resolved: false,
+        resolutionTime: market.resolutionTime.toNumber(),
+        resolutionDate: new Date(market.resolutionTime.toNumber() * 1000).toISOString(),
+      }, 400);
+    }
+    
+    // Check if claimer has a winning position
+    const [positionPda] = PublicKey.findProgramAddressSync(
+      [Buffer.from('position'), marketPubkey.toBuffer(), claimer.toBuffer()],
+      programId
+    );
+    
+    let position;
+    try {
+      position = await program.account.position.fetch(positionPda);
+    } catch {
+      return c.json({ 
+        error: 'No position found for this wallet in this market.',
+        positionPda: positionPda.toBase58(),
+      }, 404);
+    }
+    
+    const winningOutcome = market.winningOutcome as number;
+    const winnerShares = position.shares[winningOutcome].toNumber();
+    
+    if (winnerShares <= 0) {
+      return c.json({ 
+        error: 'No winning shares to claim. Either you bet on a losing outcome or already claimed.',
+        winningOutcome,
+        winningOutcomeName: market.outcomes[winningOutcome],
+        yourShares: position.shares.map((s: any) => s.toString()),
+      }, 400);
+    }
+    
+    // Calculate expected payout
+    const totalWinningShares = market.outcomePools[winningOutcome].toNumber();
+    const totalPool = market.totalPool.toNumber();
+    const grossPayout = Math.floor((winnerShares * totalPool) / totalWinningShares);
+    const fee = Math.floor(grossPayout / 50); // 2%
+    const netPayout = grossPayout - fee;
+    
+    // Build instruction
+    const ix = await program.methods
+      .claimWinnings()
+      .accounts({
+        market: marketPubkey,
+        position: positionPda,
+        claimer,
+      })
+      .instruction();
+    
+    // Build transaction
+    const { blockhash } = await connection.getLatestBlockhash();
+    const tx = new (await import('@solana/web3.js')).Transaction({
+      recentBlockhash: blockhash,
+      feePayer: claimer,
+    }).add(ix);
+    
+    // Return serialized unsigned tx with payout info
+    const serialized = tx.serialize({
+      requireAllSignatures: false,
+      verifySignatures: false,
+    }).toString('base64');
+    
+    return c.json({
+      unsignedTx: serialized,
+      marketPubkey: marketPubkey.toBase58(),
+      positionPda: positionPda.toBase58(),
+      payout: {
+        winningOutcome,
+        winningOutcomeName: market.outcomes[winningOutcome],
+        yourWinningShares: winnerShares,
+        totalWinningShares,
+        totalPool: totalPool / LAMPORTS_PER_SOL,
+        grossPayoutLamports: grossPayout,
+        feeLamports: fee,
+        netPayoutLamports: netPayout,
+        netPayoutSol: netPayout / LAMPORTS_PER_SOL,
+      },
+      message: 'Sign this transaction with your wallet and submit via signedTx field',
+    });
+  } catch (error) {
+    console.error('Error claiming winnings:', error);
+    return c.json({ error: String(error) }, 500);
   }
 });
 
