@@ -93,6 +93,7 @@ app.get('/', (c) => {
       'GET /markets/:id/verify': 'Verify resolution data (agents can check independently)',
       'GET /resolutions/pending': 'List upcoming resolutions + challenge windows',
       'GET /verify-all': '🔍 Run full trust verification (check on-chain state, vaults, etc.)',
+      'GET /security': '🔒 Security model docs (what authority can/cannot do)',
       'POST /markets': 'Create a new market (authority only)',
       'POST /markets/:id/bet': 'Place a bet (returns unsigned tx to sign)',
       'POST /markets/:id/claim': 'Claim winnings after resolution (returns unsigned tx)',
@@ -987,6 +988,97 @@ app.get('/verify-all', async (c) => {
       message: 'You can verify manually via Solana Explorer',
     }, 500);
   }
+});
+
+// === Security Model Endpoint ===
+// Documents exactly what the authority CAN and CANNOT do
+// Agents should verify these claims against the program code
+
+app.get('/security', async (c) => {
+  const programCodeUrl = 'https://github.com/mxmnci/agentbets/blob/main/programs/agentbets/src/lib.rs';
+  
+  return c.json({
+    title: 'AgentBets Security Model',
+    summary: 'Your SOL is held by the Solana program, not by us. We can resolve markets, but we cannot steal funds.',
+    
+    authorityCapabilities: {
+      canDo: [
+        {
+          action: 'Resolve markets',
+          proof: 'resolve_market instruction requires authority signer',
+          risk: 'Could resolve incorrectly in their favor',
+          mitigation: 'Auto-resolution for verifiable markets removes this risk. For other markets, transparent criteria + challenge window.',
+        },
+        {
+          action: 'Create new markets',
+          proof: 'create_market instruction requires authority signer',
+          risk: 'None - creating markets doesn\'t affect existing funds',
+        },
+      ],
+      cannotDo: [
+        {
+          action: 'Withdraw funds from market accounts',
+          proof: 'No withdraw instruction exists in the program. Only claim_winnings can move SOL out, and it requires: (1) market resolved, (2) caller has winning shares.',
+          codeRef: `${programCodeUrl}#L98-L130`,
+        },
+        {
+          action: 'Modify your position',
+          proof: 'Position PDA is derived from [market, owner]. Only owner can call claim_winnings with their position.',
+          codeRef: `${programCodeUrl}#L195-L206`,
+        },
+        {
+          action: 'Prevent you from claiming',
+          proof: 'claim_winnings is permissionless. If you have winning shares, you can claim. Authority signature not required.',
+          codeRef: `${programCodeUrl}#L98`,
+        },
+        {
+          action: 'Change the program',
+          proof: 'Program is deployed and immutable (no upgrade authority). Verify on Solana Explorer.',
+        },
+      ],
+    },
+    
+    fundProtection: {
+      howFundsAreStored: 'SOL is transferred directly to the market PDA (program-owned account) via buy_shares instruction.',
+      whoOwnsThePDA: 'The Solana program owns the market PDA. Only program instructions can move SOL out.',
+      howFundsAreReleased: 'Only claim_winnings instruction can transfer SOL out. It verifies: resolved=true, caller has winning shares, shares > 0.',
+      doubleClaim: 'Shares are zeroed after claim (position.shares[winning_outcome] = 0), preventing double-claims.',
+    },
+    
+    worstCaseScenarios: [
+      {
+        scenario: 'Authority resolves market incorrectly',
+        impact: 'Winners become losers and vice versa',
+        mitigation: 'Auto-resolution for verifiable markets, transparent criteria for others, 24h challenge window',
+        note: 'For verifiable markets (submissions, test), resolution is programmatic - authority discretion eliminated',
+      },
+      {
+        scenario: 'Authority disappears',
+        impact: 'Markets without auto-resolution never resolve, funds locked',
+        mitigation: 'Auto-resolution covers verifiable markets. For others, consider this risk before betting large amounts.',
+      },
+      {
+        scenario: 'Smart contract bug',
+        impact: 'Funds could be lost or locked',
+        mitigation: 'Program is simple (220 lines), no external calls. You can audit it yourself.',
+        audit: 'Not audited (hackathon project). Bet accordingly.',
+      },
+    ],
+    
+    verifyYourself: {
+      programCode: programCodeUrl,
+      programOnChain: `https://explorer.solana.com/address/${DEVNET_PROGRAM_ID}?cluster=devnet`,
+      programId: DEVNET_PROGRAM_ID,
+      marketAccounts: 'Each market is a PDA. Check account data on Explorer.',
+      vaultLocations: 'SOL is stored IN the market account itself (not a separate vault). Check market account balance.',
+    },
+    
+    keyInsight: 'We designed the program with no admin privileges over funds. The only power the authority has is resolving markets - and we\'ve eliminated even that for verifiable markets via auto-resolution.',
+    
+    recommendation: 'Start with small bets on auto-resolvable markets (submissions-over-*, fresh-test-*). Once you see correct resolution, consider larger bets on other markets.',
+    
+    timestamp: new Date().toISOString(),
+  });
 });
 
 // === Helper Functions ===
