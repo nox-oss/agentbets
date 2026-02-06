@@ -6,7 +6,7 @@ resolution = true
 skip-lint = false
 
 [programs.devnet]
-agentbets = "G59nkJ7khC1aKMr6eaRX1SssfeUuP7Ln8BpDj7ELkkcu"
+agentbets = "FtNvaXJs5ZUbxPPq91XayvM4MauZyPgxJRrV16fGfn6H"
 
 [programs.localnet]
 agentbets = "FtNvaXJs5ZUbxPPq91XayvM4MauZyPgxJRrV16fGfn6H"
