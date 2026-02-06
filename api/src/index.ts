@@ -395,11 +395,11 @@ app.get('/markets/:id/verify', async (c) => {
     
     // Verification logic per market type
     if (marketIdStr === 'submissions-over-400' || marketIdStr === 'submissions-over-350') {
-      // Fetch live project count from Arena API
+      // Fetch live project count from Colosseum API
       const threshold = marketIdStr === 'submissions-over-400' ? 400 : 350;
       
       try {
-        const response = await fetch('https://arena.colosseum.org/api/hackathons/solana-agent-hackathon/projects');
+        const response = await fetch('https://agents.colosseum.com/api/projects');
         const data = await response.json() as { projects: any[] };
         const projectCount = data.projects?.length || 0;
         
@@ -410,7 +410,7 @@ app.get('/markets/:id/verify', async (c) => {
           marketId: marketIdStr,
           question: market.question,
           outcomes: market.outcomes,
-          verificationSource: 'https://arena.colosseum.org/api/hackathons/solana-agent-hackathon/projects',
+          verificationSource: 'https://agents.colosseum.com/api/projects',
           verificationMethod: `Count projects and compare to threshold (>${threshold})`,
           currentData: {
             projectCount,
@@ -431,8 +431,8 @@ app.get('/markets/:id/verify', async (c) => {
         return c.json({
           marketId: marketIdStr,
           error: 'Failed to fetch verification data',
-          verificationSource: 'https://arena.colosseum.org/api/hackathons/solana-agent-hackathon/projects',
-          manualVerification: `curl -s "https://arena.colosseum.org/api/hackathons/solana-agent-hackathon/projects" | jq '.projects | length'`,
+          verificationSource: 'https://agents.colosseum.com/api/projects',
+          manualVerification: `curl -s "https://agents.colosseum.com/api/projects" | jq '.projects | length'`,
         }, 503);
       }
     }

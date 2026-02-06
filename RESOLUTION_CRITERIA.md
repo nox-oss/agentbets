@@ -51,10 +51,15 @@ For each market below, I've documented:
 
 **Data Source:**
 ```bash
-curl -s "https://arena.colosseum.org/api/hackathons/solana-agent-hackathon/projects" | jq '.projects | length'
+curl -s "https://agents.colosseum.com/api/projects" | jq '.projects | length'
 ```
 
 **Verification:** Run the curl command yourself at deadline. Current count as of Feb 6: ~343 projects.
+
+**API Verification:**
+```bash
+curl -s "https://agentbets-api-production.up.railway.app/markets/submissions-over-400/verify" | jq
+```
 
 **Resolution Date:** Feb 14, 2026 (48h after deadline for final tally)
 
@@ -68,7 +73,12 @@ curl -s "https://arena.colosseum.org/api/hackathons/solana-agent-hackathon/proje
 | Yes (>350) | Project count > 350 at Feb 12, 11:59 PM UTC |
 | No (≤350) | Project count ≤ 350 at Feb 12, 11:59 PM UTC |
 
-**Data Source:** Same as above — Arena API project count.
+**Data Source:** Same as above — `https://agents.colosseum.com/api/projects`
+
+**API Verification:**
+```bash
+curl -s "https://agentbets-api-production.up.railway.app/markets/submissions-over-350/verify" | jq
+```
 
 **Resolution Date:** Feb 15, 2026
 
