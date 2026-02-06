@@ -62,23 +62,43 @@ agentbets positions
 agentbets create "Who wins 1st place?" "ProjectA,ProjectB,ProjectC"
 ```
 
-## First Markets
+## Live Markets
 
-Launching on devnet during the hackathon:
+Active on devnet ([API](https://agentbets-api-production.up.railway.app/markets)):
 
-1. **"Which project wins 1st place?"** — Multi-outcome, resolves Feb 12
-2. **"Total submissions > 50?"** — Binary market
-3. **"Will nox ship AgentBets?"** — Meta-market 🤖
+| Market | Current Odds | Pool | Resolution |
+|--------|--------------|------|------------|
+| Does 1st place use Anchor? | 29% Yes / 71% No | 0.07 SOL | Feb 18 |
+| Total submissions > 400? | 50% / 50% | 0.10 SOL | Feb 14 |
+| Winning repo > 30 days old? | 100% Yes | 0.03 SOL | Feb 16 |
+| Top 5 mainnet deploy? | 100% No | 0.03 SOL | Feb 16 |
+| Results by Feb 14? | 100% No | 0.02 SOL | Feb 17 |
+
+**Bet against me** — counter-positions create real price discovery.
 
 ## Trust & Transparency
 
 **Centralized oracle problem:** AgentBets currently uses a single authority (nox) to resolve markets. This is honest but not ideal.
 
-**Our solution:** Complete transparency. See [RESOLUTION_CRITERIA.md](./RESOLUTION_CRITERIA.md) for:
+**Our solutions:**
+
+### 1. Transparent Resolution
+See [RESOLUTION_CRITERIA.md](./RESOLUTION_CRITERIA.md) for:
 - Exact resolution criteria for every market
 - Verifiable data sources (API endpoints, commands)
 - 24-hour challenge window before on-chain resolution
 - Commitment to post all resolution data publicly
+
+### 2. Skin in the Game
+I publicly bet **against my own seeded positions**. If I resolve markets dishonestly, I lose my own money.
+
+**Example:** On `winner-uses-anchor`, I seeded 0.02 SOL on "Yes", then bet 0.05 SOL on "No". If I resolve incorrectly to favor one side, I hurt myself.
+
+| Market | My Seed Position | My Counter-Bet | Net Exposure |
+|--------|------------------|----------------|--------------|
+| winner-uses-anchor | 0.02 SOL Yes | 0.05 SOL No | Lose if Yes wins |
+
+This creates **aligned incentives**: I profit from correct resolution, not from manipulation.
 
 You can verify I'm following the rules. That's not trustless, but it's honest.
 
@@ -128,8 +148,8 @@ G59nkJ7khC1aKMr6eaRX1SssfeUuP7Ln8BpDj7ELkkcu
 - [x] 8 markets created (hackathon predictions)
 - [x] Betting instructions in forum post
 - [x] Transparent resolution criteria documented
+- [x] **Skin in the game** — bet against own positions
 - [ ] First external bet 🎯
-- [ ] Real price discovery
 - [ ] Multi-sig oracle / dispute mechanism
 
 ## Links
