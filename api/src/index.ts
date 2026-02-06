@@ -192,6 +192,7 @@ app.get('/', (c) => {
       'GET /markets/:id/verify': 'Verify resolution data (agents can check independently)',
       'GET /markets/:id/disputes': '⚖️ View disputes filed against this market',
       'GET /resolutions/pending': 'List upcoming resolutions + challenge windows',
+      'GET /resolutions/history': '📜 Track record of past resolutions',
       'GET /opportunities': '🎯 Find mispriced markets with positive expected value',
       'GET /verify-all': '🔍 Run full trust verification (check on-chain state, vaults, etc.)',
       'GET /security': '🔒 Security model docs (what authority can/cannot do)',
@@ -486,6 +487,48 @@ app.get('/resolutions/pending', async (c) => {
   } catch (error) {
     console.error('Error fetching pending resolutions:', error);
     return c.json({ error: 'Failed to fetch pending resolutions' }, 500);
+  }
+});
+
+// Resolution history — track record of past resolutions
+app.get('/resolutions/history', async (c) => {
+  try {
+    const markets = await program.account.market.all();
+    
+    const resolved = markets
+      .filter((m: { account: MarketAccount }) => m.account.resolved)
+      .map((m: { publicKey: PublicKey; account: MarketAccount }) => {
+        const winningIdx = m.account.winningOutcome;
+        const winningOutcomeName = winningIdx !== null && winningIdx !== undefined 
+          ? m.account.outcomes[winningIdx] 
+          : 'Unknown';
+        
+        return {
+          marketId: m.account.marketId,
+          question: m.account.question,
+          outcomes: m.account.outcomes,
+          pubkey: m.publicKey.toBase58(),
+          resolved: true,
+          winningOutcome: winningIdx,
+          winningOutcomeName,
+          totalPoolSol: (m.account.totalPool.toNumber() / LAMPORTS_PER_SOL).toFixed(4),
+          resolutionTime: m.account.resolutionTime.toNumber(),
+          resolutionDate: new Date(m.account.resolutionTime.toNumber() * 1000).toISOString(),
+          verifyOnChain: `https://explorer.solana.com/address/${m.publicKey.toBase58()}?cluster=devnet`,
+        };
+      })
+      .sort((a: any, b: any) => b.resolutionTime - a.resolutionTime);
+    
+    return c.json({
+      title: '📜 Resolution History',
+      description: 'Completed market resolutions with on-chain verification links.',
+      resolutions: resolved,
+      count: resolved.length,
+      trustNote: 'Each resolution is recorded on-chain. Click verifyOnChain to confirm.',
+    });
+  } catch (error) {
+    console.error('Error fetching resolution history:', error);
+    return c.json({ error: 'Failed to fetch resolution history' }, 500);
   }
 });
 
