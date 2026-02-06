@@ -92,6 +92,7 @@ app.get('/', (c) => {
       'GET /markets/:id/position/:owner': 'Get position for a user',
       'GET /markets/:id/verify': 'Verify resolution data (agents can check independently)',
       'GET /resolutions/pending': 'List upcoming resolutions + challenge windows',
+      'GET /opportunities': '🎯 NEW: Find mispriced markets with positive expected value',
       'GET /verify-all': '🔍 Run full trust verification (check on-chain state, vaults, etc.)',
       'GET /security': '🔒 Security model docs (what authority can/cannot do)',
       'POST /markets': 'Create a new market (authority only)',
@@ -987,6 +988,175 @@ app.get('/verify-all', async (c) => {
       details: String(error),
       message: 'You can verify manually via Solana Explorer',
     }, 500);
+  }
+});
+
+// === Opportunities Endpoint ===
+// Highlights mispriced markets where agents can make profit
+// Shows expected value calculations for each bet
+
+app.get('/opportunities', async (c) => {
+  try {
+    const markets = await program.account.market.all();
+    const now = Math.floor(Date.now() / 1000);
+    
+    const opportunities: any[] = [];
+    
+    for (const m of markets) {
+      const market = m.account;
+      const marketId = market.marketId;
+      
+      // Skip resolved markets
+      if (market.resolved) continue;
+      
+      // Skip expired markets
+      if (now > market.resolutionTime.toNumber()) continue;
+      
+      const totalPool = market.totalPool.toNumber();
+      const outcomePools = market.outcomePools.map((p: any) => p.toNumber());
+      
+      // Calculate current implied probabilities
+      const impliedOdds = outcomePools.map((pool: number) => 
+        totalPool > 0 ? pool / totalPool : 1 / market.outcomes.length
+      );
+      
+      // Get fair odds based on verifiable data
+      let fairOdds: number[] | null = null;
+      let confidence = 'unknown';
+      let reasoning = '';
+      let opportunity: any = null;
+      
+      if (marketId === 'submissions-over-400' || marketId === 'submissions-over-350') {
+        // Fetch live project count
+        try {
+          const response = await fetch('https://agents.colosseum.com/api/projects');
+          const data = await response.json() as { totalCount?: number; projects?: any[] };
+          const projectCount = data.totalCount ?? data.projects?.length ?? 0;
+          const threshold = marketId === 'submissions-over-400' ? 400 : 350;
+          const daysRemaining = 6; // Hackathon ends Feb 12
+          const projectsNeeded = threshold - projectCount;
+          const projectsPerDay = projectCount / 4; // ~4 days elapsed
+          const projectedFinal = projectCount + (projectsPerDay * daysRemaining);
+          
+          if (projectsNeeded > projectedFinal * 0.5) {
+            // Very unlikely to hit threshold
+            fairOdds = [0.05, 0.95]; // 5% Yes, 95% No
+            confidence = 'high';
+            reasoning = `${projectCount} projects now, need ${projectsNeeded} more for ${threshold}. At current rate (~${projectsPerDay.toFixed(0)}/day), projected final: ${projectedFinal.toFixed(0)}. Very unlikely to hit threshold.`;
+          } else if (projectedFinal > threshold * 1.2) {
+            // Likely to hit threshold
+            fairOdds = [0.85, 0.15]; // 85% Yes, 15% No
+            confidence = 'high';
+            reasoning = `${projectCount} projects now, projected ${projectedFinal.toFixed(0)} by deadline. Likely to exceed ${threshold}.`;
+          } else {
+            // Close call
+            fairOdds = [0.4, 0.6];
+            confidence = 'medium';
+            reasoning = `${projectCount} projects now, projected ${projectedFinal.toFixed(0)}. Threshold ${threshold} is borderline.`;
+          }
+          
+          // Calculate best opportunity
+          const impliedNoProb = impliedOdds[1];
+          const fairNoProb = fairOdds[1];
+          const edge = fairNoProb - impliedNoProb;
+          
+          if (edge > 0.1) { // At least 10% edge
+            const betAmount = 0.1 * LAMPORTS_PER_SOL; // 0.1 SOL example
+            const potentialReturn = betAmount / impliedNoProb;
+            const expectedValue = (fairNoProb * potentialReturn) - betAmount;
+            const evPercent = (expectedValue / betAmount) * 100;
+            
+            opportunity = {
+              recommendedBet: 'No',
+              outcomeIndex: 1,
+              edge: `${(edge * 100).toFixed(1)}%`,
+              impliedOdds: `${(impliedNoProb * 100).toFixed(1)}%`,
+              fairOdds: `${(fairNoProb * 100).toFixed(1)}%`,
+              exampleBet: {
+                amount: '0.1 SOL',
+                potentialReturn: `${(potentialReturn / LAMPORTS_PER_SOL).toFixed(3)} SOL`,
+                expectedValue: `+${(expectedValue / LAMPORTS_PER_SOL).toFixed(4)} SOL`,
+                evPercent: `+${evPercent.toFixed(1)}%`,
+              },
+              confidence,
+              reasoning,
+              currentData: {
+                projectCount,
+                threshold,
+                daysRemaining,
+                projectedFinal: projectedFinal.toFixed(0),
+              },
+            };
+          }
+        } catch {
+          // API fetch failed
+        }
+      }
+      
+      // Test markets (known outcomes)
+      if (marketId.startsWith('fresh-test-')) {
+        const resolutionTime = market.resolutionTime.toNumber();
+        const hoursUntil = (resolutionTime - now) / 3600;
+        
+        fairOdds = [1.0, 0.0]; // Always resolves to Yes
+        confidence = 'certain';
+        reasoning = 'Test market - always resolves to "Yes" after resolution time.';
+        
+        if (hoursUntil <= 0) {
+          opportunity = {
+            recommendedBet: 'Yes (then trigger auto-resolve)',
+            outcomeIndex: 0,
+            edge: '100%',
+            impliedOdds: `${(impliedOdds[0] * 100).toFixed(1)}%`,
+            fairOdds: '100%',
+            action: 'Bet on Yes, then call POST /auto-resolve to claim',
+            confidence: 'certain',
+            reasoning: 'Resolution time passed. Yes is guaranteed.',
+            autoResolvable: true,
+          };
+        }
+      }
+      
+      if (opportunity) {
+        opportunities.push({
+          marketId,
+          question: market.question,
+          outcomes: market.outcomes,
+          currentOdds: impliedOdds.map((p: number) => `${(p * 100).toFixed(1)}%`),
+          totalPool: `${(totalPool / LAMPORTS_PER_SOL).toFixed(4)} SOL`,
+          opportunity,
+          resolves: new Date(market.resolutionTime.toNumber() * 1000).toISOString(),
+          betEndpoint: `POST /markets/${marketId}/bet`,
+        });
+      }
+    }
+    
+    // Sort by edge (highest first)
+    opportunities.sort((a, b) => {
+      const edgeA = parseFloat(a.opportunity.edge) || 0;
+      const edgeB = parseFloat(b.opportunity.edge) || 0;
+      return edgeB - edgeA;
+    });
+    
+    return c.json({
+      title: '🎯 AgentBets Opportunities',
+      summary: opportunities.length > 0 
+        ? `Found ${opportunities.length} mispriced market(s) with positive expected value`
+        : 'No clear opportunities right now. Check back later or create counter-positions.',
+      opportunities,
+      methodology: {
+        howWeCalculate: 'We compare market-implied odds to fair odds based on verifiable data.',
+        edge: 'The difference between fair probability and market probability.',
+        expectedValue: '(fairOdds × potentialReturn) - betAmount. Positive EV = profitable long-term.',
+        confidence: 'How certain we are about the fair odds (certain > high > medium > low).',
+      },
+      disclaimer: 'This is not financial advice. Verify all data independently before betting.',
+      dataSource: 'https://agents.colosseum.com/api/projects',
+      timestamp: new Date().toISOString(),
+    });
+  } catch (error) {
+    console.error('Error calculating opportunities:', error);
+    return c.json({ error: 'Failed to calculate opportunities' }, 500);
   }
 });
 
