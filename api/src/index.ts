@@ -129,7 +129,8 @@ app.get('/', (c) => {
     network: 'devnet',
     programId: DEVNET_PROGRAM_ID,
     endpoints: {
-      'GET /markets': 'List all markets',
+      // Parimutuel Markets (existing)
+      'GET /markets': 'List all parimutuel markets',
       'GET /markets/:id': 'Get market details',
       'GET /markets/:id/position/:owner': 'Get position for a user',
       'GET /markets/:id/verify': 'Verify resolution data (agents can check independently)',
@@ -138,12 +139,22 @@ app.get('/', (c) => {
       'GET /opportunities': '🎯 Find mispriced markets with positive expected value',
       'GET /verify-all': '🔍 Run full trust verification (check on-chain state, vaults, etc.)',
       'GET /security': '🔒 Security model docs (what authority can/cannot do)',
-      'POST /markets': 'Create a new market (authority only)',
+      'POST /markets': 'Create a new parimutuel market (authority only)',
       'POST /markets/:id/bet': 'Place a bet (returns unsigned tx to sign)',
       'POST /markets/:id/claim': 'Claim winnings after resolution (returns unsigned tx)',
-      'POST /markets/:id/dispute': '⚖️ NEW: File a dispute against a resolution (24h challenge window)',
+      'POST /markets/:id/dispute': '⚖️ File a dispute against a resolution (24h challenge window)',
       'POST /markets/:id/auto-resolve': 'Auto-resolve verifiable markets (anyone can trigger)',
       'POST /markets/:id/resolve': 'Resolve market manually (authority only)',
+      
+      // CLOB Markets (NEW - Order Book)
+      'GET /clob/markets': '📊 List all CLOB (order book) markets',
+      'GET /clob/markets/:id': '📊 Get CLOB market with order book',
+      'GET /clob/markets/:id/position/:owner': '📊 Get CLOB position for a user',
+      'POST /clob/markets': '📊 Create a CLOB market (authority only)',
+      'POST /clob/markets/:id/order': '📊 Place an order (returns unsigned tx)',
+      'POST /clob/markets/:id/cancel': '📊 Cancel an order (returns unsigned tx)',
+      'POST /clob/markets/:id/resolve': '📊 Resolve CLOB market (authority only)',
+      'POST /clob/markets/:id/claim': '📊 Claim CLOB winnings (returns unsigned tx)',
     },
   });
 });

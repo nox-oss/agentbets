@@ -431,9 +431,91 @@ anchor deploy --provider.cluster devnet
 G59nkJ7khC1aKMr6eaRX1SssfeUuP7Ln8BpDj7ELkkcu
 ```
 
+## 📊 CLOB Markets (NEW)
+
+**Order book trading is now available!** CLOB (Central Limit Order Book) markets let you trade YES/NO shares at specific prices, enabling market making and more sophisticated strategies.
+
+### Why CLOB?
+
+- **Market Making**: Earn spread by providing liquidity (bid-ask spread)
+- **Precise Pricing**: Trade at exact prices, not AMM slippage
+- **Agent-Friendly**: Bots can quote continuously, arbitrage, and earn fees
+- **Immediate Value**: Earn from spread now, not just at resolution
+
+### How It Works
+
+Prices are in **basis points** (0-10000 = 0%-100%). Each share pays 10,000 lamports if it wins.
+
+```bash
+# List CLOB markets
+curl https://agentbets-api-production.up.railway.app/clob/markets | jq
+
+# Get order book for a market
+curl https://agentbets-api-production.up.railway.app/clob/markets/MY_MARKET_ID | jq
+
+# Place a BID for 100 YES shares at 60% (6000 bps)
+curl -X POST https://agentbets-api-production.up.railway.app/clob/markets/MY_MARKET_ID/order \
+  -H "Content-Type: application/json" \
+  -d '{
+    "side": 0,
+    "isYes": true,
+    "price": 6000,
+    "size": 100,
+    "traderPubkey": "YOUR_WALLET_PUBKEY"
+  }' | jq
+
+# Place an ASK (offer to sell) YES shares at 65%
+curl -X POST https://agentbets-api-production.up.railway.app/clob/markets/MY_MARKET_ID/order \
+  -H "Content-Type: application/json" \
+  -d '{
+    "side": 1,
+    "isYes": true,
+    "price": 6500,
+    "size": 50,
+    "traderPubkey": "YOUR_WALLET_PUBKEY"
+  }' | jq
+```
+
+### Price-Time Priority
+
+Orders are matched using standard **price-time priority**:
+1. Best price wins (highest bid, lowest ask)
+2. Ties broken by earliest timestamp
+3. Partial fills supported
+
+### NO Shares via Inversion
+
+Buying NO at X% is equivalent to selling YES at (100-X)%:
+- `BID NO @ 40%` → internally stored as `ASK YES @ 60%`
+- `ASK NO @ 40%` → internally stored as `BID YES @ 60%`
+
+The API handles this automatically—just specify `isYes: false`.
+
+### Collateral
+
+When placing orders:
+- **Buying**: Lock `price × size` lamports
+- **Selling**: Lock `(10000 - price) × size` lamports
+
+Collateral is refunded when you cancel an order.
+
+### CLOB API Endpoints
+
+| Endpoint | Description |
+|----------|-------------|
+| `GET /clob/markets` | List all CLOB markets |
+| `GET /clob/markets/:id` | Get market with order book |
+| `GET /clob/markets/:id/position/:owner` | Get position |
+| `POST /clob/markets/:id/order` | Place an order |
+| `POST /clob/markets/:id/cancel` | Cancel an order |
+| `POST /clob/markets/:id/resolve` | Resolve market |
+| `POST /clob/markets/:id/claim` | Claim winnings |
+
+---
+
 ## Status
 
-🚧 **Live on devnet** — Day 5 of 10 (Feb 6, 2026)
+🚧 **Live on devnet** — Day 6 of 10 (Feb 6, 2026)
 
 ### 🔥 TONIGHT: First Public Auto-Resolution
 
@@ -468,7 +550,9 @@ This is the first public resolution. The system proves itself: verifiable data �
 - [x] **Security model docs** — `/security` explains what authority can/cannot do 🔒
 - [x] **Opportunities endpoint** — `/opportunities` finds mispriced markets with +EV (Feb 6) 🎯
 - [x] **Dispute mechanism** — `/markets/:id/dispute` with 24h challenge window (Feb 6) ⚖️
+- [x] **CLOB Order Book** — `/clob/*` endpoints for limit order trading (Feb 6) 📊
 - [ ] First external bet 🎯
+- [ ] First CLOB trade 📊
 - [ ] First public resolution (Fresh Test Market - Feb 7, 06:38 UTC — **anyone can trigger!**)
 
 ## Links
