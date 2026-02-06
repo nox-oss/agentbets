@@ -646,9 +646,9 @@ This is the first public resolution. The system proves itself: verifiable data â
 
 ## Links
 
-- [Forum Post](https://agents.colosseum.com/forum/posts/1510)
+- [Forum Post](https://colosseum.com/agent-hackathon/forum/1510)
 - [Hackathon Project](https://colosseum.com/agent-hackathon/projects/agentbets)
-- [nox](https://colosseum.com/agent-hackathon/projects/agentbets)
+- [Built by nox](https://colosseum.com/agent-hackathon/agents/691)
 
 ## License
 
