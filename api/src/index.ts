@@ -5,8 +5,50 @@ import { Connection, PublicKey, Keypair, SystemProgram, LAMPORTS_PER_SOL } from 
 import { Program, AnchorProvider, Wallet, setProvider } from '@coral-xyz/anchor';
 import BN from 'bn.js';
 import * as bs58 from 'bs58';
-import { readFileSync } from 'fs';
+import { readFileSync, writeFileSync, existsSync } from 'fs';
 import idl from './idl.json' with { type: 'json' };
+
+// === Dispute System ===
+interface Dispute {
+  id: string;
+  marketId: string;
+  disputerPubkey: string;
+  reason: string;
+  evidence?: string;
+  createdAt: string;
+  status: 'active' | 'resolved' | 'rejected';
+  resolution?: {
+    resolvedAt: string;
+    outcome: string;
+    responseBy: string;
+  };
+}
+
+const DISPUTES_FILE = process.env.DISPUTES_FILE || './disputes.json';
+
+function loadDisputes(): Record<string, Dispute[]> {
+  try {
+    if (existsSync(DISPUTES_FILE)) {
+      return JSON.parse(readFileSync(DISPUTES_FILE, 'utf-8'));
+    }
+  } catch (e) {
+    console.error('Failed to load disputes:', e);
+  }
+  return {};
+}
+
+function saveDisputes(disputes: Record<string, Dispute[]>) {
+  try {
+    writeFileSync(DISPUTES_FILE, JSON.stringify(disputes, null, 2));
+  } catch (e) {
+    console.error('Failed to save disputes:', e);
+  }
+}
+
+function getActiveDisputes(marketId: string): Dispute[] {
+  const disputes = loadDisputes();
+  return (disputes[marketId] || []).filter(d => d.status === 'active');
+}
 
 // === Types ===
 interface MarketAccount {
@@ -91,13 +133,15 @@ app.get('/', (c) => {
       'GET /markets/:id': 'Get market details',
       'GET /markets/:id/position/:owner': 'Get position for a user',
       'GET /markets/:id/verify': 'Verify resolution data (agents can check independently)',
+      'GET /markets/:id/disputes': '⚖️ View disputes filed against this market',
       'GET /resolutions/pending': 'List upcoming resolutions + challenge windows',
-      'GET /opportunities': '🎯 NEW: Find mispriced markets with positive expected value',
+      'GET /opportunities': '🎯 Find mispriced markets with positive expected value',
       'GET /verify-all': '🔍 Run full trust verification (check on-chain state, vaults, etc.)',
       'GET /security': '🔒 Security model docs (what authority can/cannot do)',
       'POST /markets': 'Create a new market (authority only)',
       'POST /markets/:id/bet': 'Place a bet (returns unsigned tx to sign)',
       'POST /markets/:id/claim': 'Claim winnings after resolution (returns unsigned tx)',
+      'POST /markets/:id/dispute': '⚖️ NEW: File a dispute against a resolution (24h challenge window)',
       'POST /markets/:id/auto-resolve': 'Auto-resolve verifiable markets (anyone can trigger)',
       'POST /markets/:id/resolve': 'Resolve market manually (authority only)',
     },
@@ -710,6 +754,16 @@ app.post('/markets/:id/auto-resolve', async (c) => {
       }, 400);
     }
     
+    // Check for active disputes
+    const activeDisputes = getActiveDisputes(marketIdStr);
+    if (activeDisputes.length > 0) {
+      return c.json({ 
+        error: 'Cannot auto-resolve: active disputes exist',
+        disputes: activeDisputes,
+        message: 'Disputes must be resolved before market can be finalized. Check /markets/:id/disputes for details.',
+      }, 400);
+    }
+    
     // Auto-resolve verifiable markets
     const isSubmissionsMarket = marketIdStr === 'submissions-over-400' || marketIdStr === 'submissions-over-350';
     const isTestMarket = marketIdStr.startsWith('fresh-test-') || marketIdStr.startsWith('hackathon-test-');
@@ -812,6 +866,136 @@ app.post('/markets/:id/auto-resolve', async (c) => {
     });
   } catch (error) {
     console.error('Error auto-resolving market:', error);
+    return c.json({ error: String(error) }, 500);
+  }
+});
+
+// === Dispute System Endpoints ===
+
+// File a dispute against a market resolution
+app.post('/markets/:id/dispute', async (c) => {
+  const marketId = c.req.param('id');
+  
+  try {
+    const body = await c.req.json();
+    const { disputerPubkey, reason, evidence } = body;
+    
+    if (!disputerPubkey || !reason) {
+      return c.json({ 
+        error: 'Missing required fields: disputerPubkey, reason' 
+      }, 400);
+    }
+    
+    // Get market pubkey
+    let marketPubkey: PublicKey;
+    let marketIdStr: string;
+    try {
+      marketPubkey = new PublicKey(marketId);
+      const market = await program.account.market.fetch(marketPubkey);
+      marketIdStr = market.marketId;
+    } catch {
+      const [pda] = PublicKey.findProgramAddressSync(
+        [Buffer.from('market'), Buffer.from(marketId)],
+        programId
+      );
+      marketPubkey = pda;
+      marketIdStr = marketId;
+    }
+    
+    // Verify market exists
+    let market;
+    try {
+      market = await program.account.market.fetch(marketPubkey);
+    } catch {
+      return c.json({ error: 'Market not found' }, 404);
+    }
+    
+    // Check if market is in challenge window
+    const now = Math.floor(Date.now() / 1000);
+    const resolutionTime = market.resolutionTime.toNumber();
+    const CHALLENGE_WINDOW_HOURS = 24;
+    const challengeDeadline = resolutionTime + (CHALLENGE_WINDOW_HOURS * 3600);
+    
+    if (now < resolutionTime) {
+      return c.json({ 
+        error: 'Cannot dispute before resolution time',
+        resolutionTime,
+        resolutionDate: new Date(resolutionTime * 1000).toISOString(),
+      }, 400);
+    }
+    
+    if (now > challengeDeadline) {
+      return c.json({ 
+        error: 'Challenge window has closed',
+        challengeDeadline,
+        challengeDeadlineDate: new Date(challengeDeadline * 1000).toISOString(),
+      }, 400);
+    }
+    
+    // Create dispute
+    const dispute: Dispute = {
+      id: `dispute-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      marketId: marketIdStr,
+      disputerPubkey,
+      reason,
+      evidence,
+      createdAt: new Date().toISOString(),
+      status: 'active',
+    };
+    
+    // Save dispute
+    const disputes = loadDisputes();
+    if (!disputes[marketIdStr]) {
+      disputes[marketIdStr] = [];
+    }
+    disputes[marketIdStr].push(dispute);
+    saveDisputes(disputes);
+    
+    console.log(`Dispute filed for ${marketIdStr}: ${reason}`);
+    
+    return c.json({
+      success: true,
+      dispute,
+      message: 'Dispute filed successfully. Resolution will be paused until dispute is reviewed.',
+      nextSteps: [
+        'Dispute will be reviewed by the authority within 24 hours',
+        'You can check dispute status at GET /markets/:id/disputes',
+        'If dispute is valid, resolution may be corrected',
+      ],
+    });
+  } catch (error) {
+    console.error('Error filing dispute:', error);
+    return c.json({ error: String(error) }, 500);
+  }
+});
+
+// Get disputes for a market
+app.get('/markets/:id/disputes', async (c) => {
+  const marketId = c.req.param('id');
+  
+  try {
+    // Get market pubkey
+    let marketIdStr: string;
+    try {
+      const marketPubkey = new PublicKey(marketId);
+      const market = await program.account.market.fetch(marketPubkey);
+      marketIdStr = market.marketId;
+    } catch {
+      marketIdStr = marketId;
+    }
+    
+    const disputes = loadDisputes();
+    const marketDisputes = disputes[marketIdStr] || [];
+    
+    return c.json({
+      marketId: marketIdStr,
+      disputes: marketDisputes,
+      activeCount: marketDisputes.filter(d => d.status === 'active').length,
+      totalCount: marketDisputes.length,
+      note: 'Active disputes pause auto-resolution until reviewed.',
+    });
+  } catch (error) {
+    console.error('Error fetching disputes:', error);
     return c.json({ error: String(error) }, 500);
   }
 });
