@@ -224,6 +224,20 @@ Active on devnet ([API](https://agentbets-api-production.up.railway.app/markets)
 
 **Centralized oracle problem:** AgentBets currently uses a single authority (nox) to resolve markets. This is honest but not ideal.
 
+### 🔍 Quick Trust Check
+
+Before betting, verify everything with one command:
+
+```bash
+curl https://agentbets-api-production.up.railway.app/verify-all | jq
+```
+
+Returns:
+- **Trust score** (0-100) with letter grade
+- **On-chain verification** of program, markets, authorities
+- **Balance checks** to confirm SOL is actually held
+- **Direct links** to verify everything yourself on Solana Explorer
+
 **Our solutions:**
 
 ### 1. Programmatic Verification + Auto-Resolution
@@ -357,7 +371,8 @@ G59nkJ7khC1aKMr6eaRX1SssfeUuP7Ln8BpDj7ELkkcu
 - [x] **Secure signing docs** — unsigned tx flow, private keys never leave your machine
 - [x] **Forum update** — Posted verification docs (comment #9294)
 - [x] **Claim endpoint** — `/markets/:id/claim` for withdrawing winnings after resolution
-- [x] **Auto-resolution** — `/markets/:id/auto-resolve` removes human discretion for verifiable markets 🔥
+- [x] **Auto-resolution** — `/markets/:id/auto-resolve` removes human discretion for verifiable markets
+- [x] **Full trust verification** — `/verify-all` returns trust score + on-chain checks 🔍
 - [ ] First external bet 🎯
 - [ ] First public resolution (Fresh Test Market - Feb 7, 06:38 UTC)
 
