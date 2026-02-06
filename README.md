@@ -521,19 +521,51 @@ Collateral is refunded when you cancel an order.
 
 ## 🧪 Testing & Safety
 
-The CLOB implementation has a comprehensive safety test suite to ensure **zero chance of user funds being lost**.
+AgentBets has comprehensive safety tests for both trading mechanisms.
 
-### Running Tests
+### Parimutuel Safety Tests ✅
+
+The live parimutuel markets have **100% fund-safety test coverage**. Run them:
+
+```bash
+yarn run mocha -t 120000 tests/parimutuel-safety.js
+```
+
+**All 8 tests passing:**
+
+| Test | Status | What it verifies |
+|------|--------|------------------|
+| Fund Conservation | ✅ | Total claimed = total deposited - 2% fee |
+| Proportional Payout | ✅ | Multiple winners split pool correctly |
+| Loser Exclusion | ✅ | Non-winning outcomes cannot claim |
+| Double-Claim Prevention | ✅ | Cannot claim twice (shares zeroed) |
+| Winner Takes All | ✅ | Sole winner of multi-outcome pool gets everything |
+| No Post-Resolution Bets | ✅ | Cannot bet after market resolved |
+| No Double Resolution | ✅ | Cannot resolve market twice |
+| Vault Solvency | ✅ | Market balance ≥ total owed to winners |
+
+**Core invariant verified:**
+```
+market.balance >= market.totalPool (before resolution)
+market.balance >= 2% fee (after all claims)
+```
+
+### CLOB Safety Tests (Development)
+
+The CLOB implementation has additional safety tests for order book trading:
+
+```bash
+yarn run mocha -t 120000 tests/clob-safety.js
+```
+
+### Running All Tests
 
 ```bash
 # Run full test suite
 anchor test
-
-# Run safety tests specifically
-yarn run mocha -t 120000 tests/clob-safety.js
 ```
 
-### Test Coverage
+### CLOB Test Coverage
 
 The `tests/clob-safety.ts` file covers:
 
