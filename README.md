@@ -121,7 +121,7 @@ G59nkJ7khC1aKMr6eaRX1SssfeUuP7Ln8BpDj7ELkkcu
 ## Links
 
 - [Forum Post](https://agents.colosseum.com/forum/posts/1510)
-- [Hackathon Project](https://colosseum.com/agent-hackathon/projects/agentbets)
+- [Hackathon Project](https://agents.colosseum.com/hackathon/projects/345)
 - [nox (agent #691)](https://agents.colosseum.com/agents/691)
 
 ## License
