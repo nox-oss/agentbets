@@ -90,6 +90,7 @@ app.get('/', (c) => {
       'GET /markets': 'List all markets',
       'GET /markets/:id': 'Get market details',
       'GET /markets/:id/position/:owner': 'Get position for a user',
+      'GET /markets/:id/verify': 'Verify resolution data (agents can check independently)',
       'GET /resolutions/pending': 'List upcoming resolutions + challenge windows',
       'POST /markets': 'Create a new market (authority only)',
       'POST /markets/:id/bet': 'Place a bet (returns unsigned tx to sign)',
@@ -368,6 +369,139 @@ app.get('/resolutions/pending', async (c) => {
   } catch (error) {
     console.error('Error fetching pending resolutions:', error);
     return c.json({ error: 'Failed to fetch pending resolutions' }, 500);
+  }
+});
+
+// Verify market resolution data (for verifiable markets)
+// Lets agents independently check what the resolution SHOULD be
+app.get('/markets/:id/verify', async (c) => {
+  const marketId = c.req.param('id');
+  
+  try {
+    // Get market
+    let marketPubkey: PublicKey;
+    try {
+      marketPubkey = new PublicKey(marketId);
+    } catch {
+      const [pda] = PublicKey.findProgramAddressSync(
+        [Buffer.from('market'), Buffer.from(marketId)],
+        programId
+      );
+      marketPubkey = pda;
+    }
+    
+    const market = await program.account.market.fetch(marketPubkey);
+    const marketIdStr = market.marketId;
+    
+    // Verification logic per market type
+    if (marketIdStr === 'submissions-over-400' || marketIdStr === 'submissions-over-350') {
+      // Fetch live project count from Arena API
+      const threshold = marketIdStr === 'submissions-over-400' ? 400 : 350;
+      
+      try {
+        const response = await fetch('https://arena.colosseum.org/api/hackathons/solana-agent-hackathon/projects');
+        const data = await response.json() as { projects: any[] };
+        const projectCount = data.projects?.length || 0;
+        
+        const meetsThreshold = projectCount > threshold;
+        const expectedOutcome = meetsThreshold ? 0 : 1; // 0 = Yes, 1 = No
+        
+        return c.json({
+          marketId: marketIdStr,
+          question: market.question,
+          outcomes: market.outcomes,
+          verificationSource: 'https://arena.colosseum.org/api/hackathons/solana-agent-hackathon/projects',
+          verificationMethod: `Count projects and compare to threshold (>${threshold})`,
+          currentData: {
+            projectCount,
+            threshold,
+            meetsThreshold,
+          },
+          expectedResolution: {
+            outcomeIndex: expectedOutcome,
+            outcomeName: market.outcomes[expectedOutcome],
+            confidence: 'high',
+            note: 'Based on live data. Final resolution at deadline (Feb 12).',
+          },
+          resolutionTime: market.resolutionTime.toNumber(),
+          resolved: market.resolved,
+          timestamp: new Date().toISOString(),
+        });
+      } catch (fetchError) {
+        return c.json({
+          marketId: marketIdStr,
+          error: 'Failed to fetch verification data',
+          verificationSource: 'https://arena.colosseum.org/api/hackathons/solana-agent-hackathon/projects',
+          manualVerification: `curl -s "https://arena.colosseum.org/api/hackathons/solana-agent-hackathon/projects" | jq '.projects | length'`,
+        }, 503);
+      }
+    }
+    
+    // Markets that depend on hackathon results (not yet verifiable)
+    if (marketIdStr === 'winner-uses-anchor' || 
+        marketIdStr === 'winner-active-30-days' || 
+        marketIdStr === 'top5-mainnet-deploy') {
+      return c.json({
+        marketId: marketIdStr,
+        question: market.question,
+        outcomes: market.outcomes,
+        verificationStatus: 'awaiting_external_data',
+        reason: 'This market depends on hackathon results, which are not yet announced.',
+        expectedDataAvailable: 'After Feb 12 (hackathon deadline)',
+        verificationMethod: marketIdStr === 'winner-uses-anchor' 
+          ? 'Check winning repo for Anchor.toml or @coral-xyz/anchor dependency'
+          : marketIdStr === 'winner-active-30-days'
+            ? 'Check winning repo created_at date via GitHub API'
+            : 'Check top-5 project program IDs on mainnet-beta',
+        resolutionTime: market.resolutionTime.toNumber(),
+        resolved: market.resolved,
+      });
+    }
+    
+    if (marketIdStr === 'results-within-48h') {
+      return c.json({
+        marketId: marketIdStr,
+        question: market.question,
+        outcomes: market.outcomes,
+        verificationStatus: 'awaiting_external_data',
+        reason: 'Depends on official announcement timing.',
+        monitorSources: [
+          'https://twitter.com/ColosseumOrg',
+          'https://arena.colosseum.org',
+        ],
+        threshold: 'Announcement must be before Feb 14, 11:59 PM UTC',
+        resolutionTime: market.resolutionTime.toNumber(),
+        resolved: market.resolved,
+      });
+    }
+    
+    // Test market
+    if (marketIdStr.startsWith('fresh-test-') || marketIdStr.startsWith('hackathon-test-')) {
+      return c.json({
+        marketId: marketIdStr,
+        question: market.question,
+        outcomes: market.outcomes,
+        verificationStatus: 'test_market',
+        reason: 'This is a test market for system verification.',
+        note: 'Resolution decision documented in RESOLUTION_CRITERIA.md',
+        resolutionTime: market.resolutionTime.toNumber(),
+        resolved: market.resolved,
+      });
+    }
+    
+    // Unknown market type
+    return c.json({
+      marketId: marketIdStr,
+      question: market.question,
+      outcomes: market.outcomes,
+      verificationStatus: 'unknown',
+      note: 'No automated verification available. See RESOLUTION_CRITERIA.md for manual verification.',
+      resolutionTime: market.resolutionTime.toNumber(),
+      resolved: market.resolved,
+    });
+  } catch (error) {
+    console.error('Error verifying market:', error);
+    return c.json({ error: 'Market not found' }, 404);
   }
 });
 
