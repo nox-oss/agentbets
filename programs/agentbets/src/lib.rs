@@ -1,6 +1,6 @@
 use anchor_lang::prelude::*;
 
-declare_id!("G59nkJ7khC1aKMr6eaRX1SssfeUuP7Ln8BpDj7ELkkcu");
+declare_id!("FtNvaXJs5ZUbxPPq91XayvM4MauZyPgxJRrV16fGfn6H");
 
 #[program]
 pub mod agentbets {
@@ -45,12 +45,12 @@ pub mod agentbets {
         require!(!market.resolved, ErrorCode::MarketResolved);
         require!((outcome_index as usize) < market.outcomes.len(), ErrorCode::InvalidOutcome);
         
-        // Transfer SOL from buyer to market vault
+        // Transfer SOL from buyer to market account (which we own)
         let cpi_context = CpiContext::new(
             ctx.accounts.system_program.to_account_info(),
             anchor_lang::system_program::Transfer {
                 from: ctx.accounts.buyer.to_account_info(),
-                to: ctx.accounts.vault.to_account_info(),
+                to: market.to_account_info(),
             },
         );
         anchor_lang::system_program::transfer(cpi_context, amount)?;
@@ -97,7 +97,7 @@ pub mod agentbets {
     /// Claim winnings after resolution
     pub fn claim_winnings(ctx: Context<ClaimWinnings>) -> Result<()> {
         let market = &ctx.accounts.market;
-        let position = &ctx.accounts.position;
+        let position = &mut ctx.accounts.position;
         
         require!(market.resolved, ErrorCode::MarketNotResolved);
         
@@ -117,8 +117,11 @@ pub mod agentbets {
         let fee = payout / 50; // 2%
         let net_payout = payout - fee;
 
-        // Transfer from vault to winner
-        **ctx.accounts.vault.to_account_info().try_borrow_mut_lamports()? -= net_payout;
+        // Zero out shares to prevent double-claim
+        position.shares[winning_outcome] = 0;
+
+        // Transfer from market account to winner (we own the market account)
+        **ctx.accounts.market.to_account_info().try_borrow_mut_lamports()? -= net_payout;
         **ctx.accounts.claimer.to_account_info().try_borrow_mut_lamports()? += net_payout;
 
         msg!("Claimed {} lamports (fee: {})", net_payout, fee);
@@ -185,14 +188,6 @@ pub struct BuyShares<'info> {
     )]
     pub position: Account<'info, Position>,
     
-    /// CHECK: Vault PDA for holding market funds
-    #[account(
-        mut,
-        seeds = [b"vault", market.key().as_ref()],
-        bump
-    )]
-    pub vault: UncheckedAccount<'info>,
-    
     #[account(mut)]
     pub buyer: Signer<'info>,
     
@@ -219,14 +214,6 @@ pub struct ClaimWinnings<'info> {
         constraint = position.owner == claimer.key()
     )]
     pub position: Account<'info, Position>,
-    
-    /// CHECK: Vault PDA
-    #[account(
-        mut,
-        seeds = [b"vault", market.key().as_ref()],
-        bump
-    )]
-    pub vault: UncheckedAccount<'info>,
     
     #[account(mut)]
     pub claimer: Signer<'info>,
