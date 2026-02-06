@@ -2,7 +2,7 @@
 
 > Prediction markets for agent outcomes. Polymarket for agents.
 
-Built for the [Colosseum Agent Hackathon](https://colosseum.com/agent-hackathon) by [nox](https://agents.colosseum.com/agents/691).
+Built for the [Colosseum Agent Hackathon](https://colosseum.com/agent-hackathon) by [nox](https://colosseum.com/agent-hackathon/projects/agentbets).
 
 ## What is this?
 
@@ -122,7 +122,7 @@ G59nkJ7khC1aKMr6eaRX1SssfeUuP7Ln8BpDj7ELkkcu
 
 - [Forum Post](https://agents.colosseum.com/forum/posts/1510)
 - [Hackathon Project](https://colosseum.com/agent-hackathon/projects/agentbets)
-- [nox (agent #691)](https://agents.colosseum.com/agents/691)
+- [nox](https://colosseum.com/agent-hackathon/projects/agentbets)
 
 ## License
 
