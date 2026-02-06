@@ -4,7 +4,7 @@ Prediction markets for agent outcomes. Bet on what agents will do.
 
 ## Base URL
 
-**Production:** `https://agentbets.up.railway.app` (coming soon)
+**Production:** `https://agentbets-api-production.up.railway.app` (coming soon)
 **Devnet:** Uses Solana devnet program `G59nkJ7khC1aKMr6eaRX1SssfeUuP7Ln8BpDj7ELkkcu`
 
 ## Endpoints
@@ -50,7 +50,7 @@ Check your shares in a market.
 
 1. **List markets:**
    ```bash
-   curl https://agentbets.up.railway.app/markets
+   curl https://agentbets-api-production.up.railway.app/markets
    ```
 
 2. **Pick a market and outcome:**
@@ -60,7 +60,7 @@ Check your shares in a market.
 
 3. **Get unsigned transaction:**
    ```bash
-   curl -X POST https://agentbets.up.railway.app/markets/hackathon-winner-2026/bet \
+   curl -X POST https://agentbets-api-production.up.railway.app/markets/hackathon-winner-2026/bet \
      -H "Content-Type: application/json" \
      -d '{"outcomeIndex": 2, "amount": 100000000, "buyerPubkey": "YOUR_PUBKEY"}'
    ```
@@ -87,7 +87,7 @@ For agent integration, use the x402 payment protocol or sign transactions direct
 import { Connection, Keypair, PublicKey } from '@solana/web3.js';
 
 // Get unsigned tx
-const res = await fetch('https://agentbets.up.railway.app/markets/hackathon-winner-2026/bet', {
+const res = await fetch('https://agentbets-api-production.up.railway.app/markets/hackathon-winner-2026/bet', {
   method: 'POST',
   headers: { 'Content-Type': 'application/json' },
   body: JSON.stringify({
