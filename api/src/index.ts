@@ -400,8 +400,9 @@ app.get('/markets/:id/verify', async (c) => {
       
       try {
         const response = await fetch('https://agents.colosseum.com/api/projects');
-        const data = await response.json() as { projects: any[] };
-        const projectCount = data.projects?.length || 0;
+        const data = await response.json() as { projects: any[]; totalCount?: number };
+        // Use totalCount if available (API may paginate), otherwise count projects array
+        const projectCount = data.totalCount ?? data.projects?.length ?? 0;
         
         const meetsThreshold = projectCount > threshold;
         const expectedOutcome = meetsThreshold ? 0 : 1; // 0 = Yes, 1 = No
