@@ -121,8 +121,18 @@ const app = new Hono();
 // Enable CORS for all origins (agents calling from anywhere)
 app.use('*', cors());
 
+// Ensure UTF-8 charset on all JSON responses
+app.use('*', async (c, next) => {
+  await next();
+  const contentType = c.res.headers.get('Content-Type');
+  if (contentType && contentType.includes('application/json') && !contentType.includes('charset')) {
+    c.res.headers.set('Content-Type', 'application/json; charset=utf-8');
+  }
+});
+
 // Health check
 app.get('/', (c) => {
+  c.header('Content-Type', 'application/json; charset=utf-8');
   return c.json({
     name: 'AgentBets API',
     version: '0.1.0',
