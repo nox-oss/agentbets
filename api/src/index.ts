@@ -479,15 +479,33 @@ app.get('/markets/:id/verify', async (c) => {
       });
     }
     
-    // Test market
+    // Test market - auto-resolvable
     if (marketIdStr.startsWith('fresh-test-') || marketIdStr.startsWith('hackathon-test-')) {
+      const now = Math.floor(Date.now() / 1000);
+      const resolutionTime = market.resolutionTime.toNumber();
+      const canAutoResolve = now >= resolutionTime;
+      
       return c.json({
         marketId: marketIdStr,
         question: market.question,
         outcomes: market.outcomes,
-        verificationStatus: 'test_market',
-        reason: 'This is a test market for system verification.',
-        note: 'Resolution decision documented in RESOLUTION_CRITERIA.md',
+        verificationStatus: 'auto_resolvable',
+        reason: 'Test market - always resolves to "Yes" (outcome 0) to prove system works.',
+        expectedResolution: {
+          outcomeIndex: 0,
+          outcomeName: market.outcomes[0],
+          confidence: 'certain',
+        },
+        autoResolve: {
+          available: canAutoResolve,
+          resolutionTime: resolutionTime,
+          resolutionDate: new Date(resolutionTime * 1000).toISOString(),
+          hoursRemaining: canAutoResolve ? 0 : ((resolutionTime - now) / 3600).toFixed(1),
+          endpoint: `POST /markets/${marketIdStr}/auto-resolve`,
+          note: canAutoResolve 
+            ? 'Anyone can trigger auto-resolution now!' 
+            : 'Wait for resolution time to pass, then anyone can trigger',
+        },
         resolutionTime: market.resolutionTime.toNumber(),
         resolved: market.resolved,
       });
@@ -690,17 +708,56 @@ app.post('/markets/:id/auto-resolve', async (c) => {
       }, 400);
     }
     
-    // Only auto-resolve verifiable markets (submissions count)
-    if (marketIdStr !== 'submissions-over-400' && marketIdStr !== 'submissions-over-350') {
+    // Auto-resolve verifiable markets
+    const isSubmissionsMarket = marketIdStr === 'submissions-over-400' || marketIdStr === 'submissions-over-350';
+    const isTestMarket = marketIdStr.startsWith('fresh-test-') || marketIdStr.startsWith('hackathon-test-');
+    
+    if (!isSubmissionsMarket && !isTestMarket) {
       return c.json({ 
         error: 'Auto-resolution only available for verifiable markets',
         marketId: marketIdStr,
-        verifiableMarkets: ['submissions-over-400', 'submissions-over-350'],
+        verifiableMarkets: ['submissions-over-400', 'submissions-over-350', 'fresh-test-*'],
         note: 'Other markets require manual resolution after hackathon results.',
       }, 400);
     }
     
-    // Fetch verification data
+    // Handle test markets (always resolve to Yes - outcome 0)
+    if (isTestMarket) {
+      const winningOutcome = 0; // Yes
+      const winningOutcomeName = market.outcomes[winningOutcome];
+      
+      // Execute resolution
+      const tx = await program.methods
+        .resolveMarket(winningOutcome)
+        .accounts({
+          market: marketPubkey,
+          authority: authorityWallet.publicKey,
+        })
+        .signers([authorityWallet])
+        .rpc();
+      
+      console.log(`Auto-resolved test market ${marketIdStr}: ${winningOutcomeName}`);
+      
+      return c.json({
+        success: true,
+        marketId: marketIdStr,
+        resolution: {
+          winningOutcome,
+          winningOutcomeName,
+          reason: 'Test market - resolves to Yes to demonstrate system functionality',
+        },
+        verification: {
+          marketType: 'test',
+          expectedOutcome: 'Yes (always)',
+          note: 'Test markets exist to verify the betting/resolution/claim flow works correctly',
+          timestamp: new Date().toISOString(),
+        },
+        txSignature: tx,
+        message: 'Test market resolved automatically. Anyone can claim winnings.',
+      });
+    }
+    
+    // Fetch verification data for submissions markets
     const threshold = marketIdStr === 'submissions-over-400' ? 400 : 350;
     
     let projectCount: number;
