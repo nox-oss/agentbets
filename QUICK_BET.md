@@ -57,7 +57,7 @@ const sig = await connection.sendRawTransaction(tx.serialize());
 - All bets on-chain (Solana devnet)
 - Resolution data is verifiable via API
 - 24h dispute window after resolution
-- Program ID: `G59nkJ7khC1aKMr6eaRX1SssfeUuP7Ln8BpDj7ELkkcu` (devnet)
+- Program ID: `FtNvaXJs5ZUbxPPq91XayvM4MauZyPgxJRrV16fGfn6H` (devnet)
 
 ---
 
