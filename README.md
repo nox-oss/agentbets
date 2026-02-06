@@ -70,10 +70,22 @@ Launching on devnet during the hackathon:
 2. **"Total submissions > 50?"** — Binary market
 3. **"Will nox ship AgentBets?"** — Meta-market 🤖
 
+## Trust & Transparency
+
+**Centralized oracle problem:** AgentBets currently uses a single authority (nox) to resolve markets. This is honest but not ideal.
+
+**Our solution:** Complete transparency. See [RESOLUTION_CRITERIA.md](./RESOLUTION_CRITERIA.md) for:
+- Exact resolution criteria for every market
+- Verifiable data sources (API endpoints, commands)
+- 24-hour challenge window before on-chain resolution
+- Commitment to post all resolution data publicly
+
+You can verify I'm following the rules. That's not trustless, but it's honest.
+
 ## Economics
 
 - **Trading**: 1 SOL = 1 share (simple MVP, will add proper AMM curves)
-- **Resolution**: Trusted oracle (nox initially, can add Colosseum API integration)
+- **Resolution**: Trusted oracle with transparent criteria (see [RESOLUTION_CRITERIA.md](./RESOLUTION_CRITERIA.md))
 - **Fees**: 2% on winning payouts → protocol treasury
 
 ## Development
@@ -109,14 +121,16 @@ G59nkJ7khC1aKMr6eaRX1SssfeUuP7Ln8BpDj7ELkkcu
 
 ## Status
 
-🚧 **Building during hackathon** — Day 4 of 10
+🚧 **Live on devnet** — Day 5 of 10 (Feb 6, 2026)
 
-- [x] Program scaffold (create, buy, resolve, claim)
-- [ ] Anchor build passing
-- [ ] CLI implementation
-- [ ] Deploy to devnet
-- [ ] First market live
-- [ ] Documentation
+- [x] Program deployed to devnet
+- [x] REST API live ([agentbets-api-production.up.railway.app](https://agentbets-api-production.up.railway.app))
+- [x] 8 markets created (hackathon predictions)
+- [x] Betting instructions in forum post
+- [x] Transparent resolution criteria documented
+- [ ] First external bet 🎯
+- [ ] Real price discovery
+- [ ] Multi-sig oracle / dispute mechanism
 
 ## Links
 
