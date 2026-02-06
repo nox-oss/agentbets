@@ -76,15 +76,52 @@ const program = new Program(fixedIdl, provider);
 const app = new Hono();
 // Enable CORS for all origins (agents calling from anywhere)
 app.use('*', cors());
+// Ensure UTF-8 charset on all JSON responses
+app.use('*', async (c, next) => {
+    await next();
+    const contentType = c.res.headers.get('Content-Type');
+    if (contentType && contentType.includes('application/json') && !contentType.includes('charset')) {
+        c.res.headers.set('Content-Type', 'application/json; charset=utf-8');
+    }
+});
+// Serve skill.md for agent discovery
+app.get('/skill.md', async (c) => {
+    try {
+        const skillContent = readFileSync('./skill.md', 'utf-8');
+        c.header('Content-Type', 'text/markdown; charset=utf-8');
+        return c.text(skillContent);
+    }
+    catch (error) {
+        // Fallback: return inline skill summary
+        return c.text(`# AgentBets Skill
+
+Skill file not found locally. Visit https://github.com/nox-oss/agentbets for documentation.
+
+## Quick Start
+\`\`\`bash
+# List markets
+curl https://agentbets-api-production.up.railway.app/markets
+
+# Check opportunities
+curl https://agentbets-api-production.up.railway.app/opportunities
+
+# Verify trust
+curl https://agentbets-api-production.up.railway.app/verify-all
+\`\`\`
+`, 200);
+    }
+});
 // Health check
 app.get('/', (c) => {
+    c.header('Content-Type', 'application/json; charset=utf-8');
     return c.json({
         name: 'AgentBets API',
         version: '0.1.0',
         network: 'devnet',
         programId: DEVNET_PROGRAM_ID,
         endpoints: {
-            'GET /markets': 'List all markets',
+            // Parimutuel Markets (existing)
+            'GET /markets': 'List all parimutuel markets',
             'GET /markets/:id': 'Get market details',
             'GET /markets/:id/position/:owner': 'Get position for a user',
             'GET /markets/:id/verify': 'Verify resolution data (agents can check independently)',
@@ -93,12 +130,21 @@ app.get('/', (c) => {
             'GET /opportunities': '🎯 Find mispriced markets with positive expected value',
             'GET /verify-all': '🔍 Run full trust verification (check on-chain state, vaults, etc.)',
             'GET /security': '🔒 Security model docs (what authority can/cannot do)',
-            'POST /markets': 'Create a new market (authority only)',
+            'POST /markets': 'Create a new parimutuel market (authority only)',
             'POST /markets/:id/bet': 'Place a bet (returns unsigned tx to sign)',
             'POST /markets/:id/claim': 'Claim winnings after resolution (returns unsigned tx)',
-            'POST /markets/:id/dispute': '⚖️ NEW: File a dispute against a resolution (24h challenge window)',
+            'POST /markets/:id/dispute': '⚖️ File a dispute against a resolution (24h challenge window)',
             'POST /markets/:id/auto-resolve': 'Auto-resolve verifiable markets (anyone can trigger)',
             'POST /markets/:id/resolve': 'Resolve market manually (authority only)',
+            // CLOB Markets (Order Book) — ⚠️ Trading DISABLED pending bug fixes
+            'GET /clob/markets': '📊 List all CLOB markets (read-only)',
+            'GET /clob/markets/:id': '📊 Get CLOB market with order book (read-only)',
+            'GET /clob/markets/:id/position/:owner': '📊 Get CLOB position for a user (read-only)',
+            'POST /clob/markets': '⚠️ DISABLED — CLOB has known fund-safety bugs',
+            'POST /clob/markets/:id/order': '⚠️ DISABLED — use parimutuel /markets instead',
+            'POST /clob/markets/:id/cancel': '⚠️ DISABLED — CLOB trading not available',
+            'POST /clob/markets/:id/resolve': '⚠️ DISABLED — CLOB trading not available',
+            'POST /clob/markets/:id/claim': '⚠️ DISABLED — CLOB trading not available',
         },
     });
 });
@@ -1230,7 +1276,187 @@ app.get('/security', async (c) => {
         timestamp: new Date().toISOString(),
     });
 });
+// List all CLOB markets
+app.get('/clob/markets', async (c) => {
+    try {
+        const markets = await program.account.clobMarket.all();
+        return c.json({
+            markets: markets.map((m) => formatClobMarket(m.publicKey, m.account)),
+            count: markets.length,
+        });
+    }
+    catch (error) {
+        console.error('Error fetching CLOB markets:', error);
+        return c.json({ error: 'Failed to fetch CLOB markets' }, 500);
+    }
+});
+// Get single CLOB market with order book
+app.get('/clob/markets/:id', async (c) => {
+    const marketId = c.req.param('id');
+    try {
+        let marketPubkey;
+        try {
+            marketPubkey = new PublicKey(marketId);
+        }
+        catch {
+            const [pda] = PublicKey.findProgramAddressSync([Buffer.from('clob_market'), Buffer.from(marketId)], programId);
+            marketPubkey = pda;
+        }
+        const market = await program.account.clobMarket.fetch(marketPubkey);
+        // Get order book
+        const [orderBookPda] = PublicKey.findProgramAddressSync([Buffer.from('order_book'), marketPubkey.toBuffer()], programId);
+        let orderBook = null;
+        try {
+            const ob = await program.account.orderBook.fetch(orderBookPda);
+            orderBook = formatOrderBook(ob);
+        }
+        catch (e) {
+            // Order book may not exist yet
+        }
+        return c.json({
+            market: formatClobMarket(marketPubkey, market),
+            orderBook,
+        });
+    }
+    catch (error) {
+        console.error('Error fetching CLOB market:', error);
+        return c.json({ error: 'CLOB market not found' }, 404);
+    }
+});
+// Create a CLOB market
+// ⚠️ DISABLED: CLOB system has known fund-safety bugs. See CLOB_VALIDATION.md
+// Implementation preserved in git history (commit before this change)
+app.post('/clob/markets', async (c) => {
+    return c.json({
+        error: 'CLOB market creation temporarily disabled',
+        reason: 'CLOB system has known fund-safety bugs — waiting for program fix',
+        documentation: 'https://github.com/mxmnci/agentbets/blob/main/CLOB_VALIDATION.md',
+        alternative: 'Use parimutuel markets at POST /markets',
+        status: 'COMING_SOON'
+    }, 503);
+});
+// Place an order in the CLOB
+// ⚠️ DISABLED: Known bug where maker positions don't update on fill (funds can get stuck)
+// Implementation preserved in git history (commit before this change)
+app.post('/clob/markets/:id/order', async (c) => {
+    return c.json({
+        error: 'CLOB order placement temporarily disabled',
+        reason: 'Known bug: maker positions not updated on fill (funds can get stuck)',
+        documentation: 'https://github.com/mxmnci/agentbets/blob/main/CLOB_VALIDATION.md',
+        alternative: 'Use parimutuel markets at /markets endpoints — fully tested and working',
+        status: 'COMING_SOON'
+    }, 503);
+});
+// Cancel an order
+// ⚠️ DISABLED: CLOB order system has known bugs. See CLOB_VALIDATION.md
+// Implementation preserved in git history (commit before this change)
+app.post('/clob/markets/:id/cancel', async (c) => {
+    return c.json({
+        error: 'CLOB order cancellation temporarily disabled',
+        reason: 'CLOB system has known fund-safety bugs',
+        documentation: 'https://github.com/mxmnci/agentbets/blob/main/CLOB_VALIDATION.md',
+        alternative: 'Use parimutuel markets at /markets endpoints',
+        status: 'COMING_SOON'
+    }, 503);
+});
+// Resolve a CLOB market
+// ⚠️ DISABLED: CLOB system has known bugs. See CLOB_VALIDATION.md
+// Implementation preserved in git history (commit before this change)
+app.post('/clob/markets/:id/resolve', async (c) => {
+    return c.json({
+        error: 'CLOB resolution temporarily disabled',
+        reason: 'CLOB system has known fund-safety bugs',
+        documentation: 'https://github.com/mxmnci/agentbets/blob/main/CLOB_VALIDATION.md',
+        alternative: 'Use parimutuel markets at /markets endpoints',
+        status: 'COMING_SOON'
+    }, 503);
+});
+// Claim CLOB winnings
+// ⚠️ DISABLED: CLOB system has known bugs. See CLOB_VALIDATION.md
+// Implementation preserved in git history (commit before this change)
+app.post('/clob/markets/:id/claim', async (c) => {
+    return c.json({
+        error: 'CLOB claims temporarily disabled',
+        reason: 'CLOB system has known fund-safety bugs',
+        documentation: 'https://github.com/mxmnci/agentbets/blob/main/CLOB_VALIDATION.md',
+        alternative: 'Use parimutuel markets at /markets endpoints',
+        status: 'COMING_SOON'
+    }, 503);
+});
+// Get CLOB position
+app.get('/clob/markets/:id/position/:owner', async (c) => {
+    const marketId = c.req.param('id');
+    const owner = c.req.param('owner');
+    try {
+        let marketPubkey;
+        try {
+            marketPubkey = new PublicKey(marketId);
+        }
+        catch {
+            const [pda] = PublicKey.findProgramAddressSync([Buffer.from('clob_market'), Buffer.from(marketId)], programId);
+            marketPubkey = pda;
+        }
+        const ownerPubkey = new PublicKey(owner);
+        const [positionPda] = PublicKey.findProgramAddressSync([Buffer.from('clob_position'), marketPubkey.toBuffer(), ownerPubkey.toBuffer()], programId);
+        const position = await program.account.clobPosition.fetch(positionPda);
+        return c.json({
+            position: {
+                pubkey: positionPda.toBase58(),
+                owner: position.owner.toBase58(),
+                market: position.market.toBase58(),
+                yesShares: position.yesShares.toNumber(),
+                noShares: position.noShares.toNumber(),
+            },
+        });
+    }
+    catch (error) {
+        return c.json({ error: 'Position not found' }, 404);
+    }
+});
 // === Helper Functions ===
+function formatClobMarket(pubkey, account) {
+    return {
+        pubkey: pubkey.toBase58(),
+        marketId: account.marketId,
+        question: account.question,
+        type: 'CLOB',
+        resolutionTime: account.resolutionTime.toNumber(),
+        resolutionDate: new Date(account.resolutionTime.toNumber() * 1000).toISOString(),
+        resolved: account.resolved,
+        winningSide: account.winningSide,
+        winnerName: account.winningSide === null ? null : (account.winningSide === 0 ? 'YES' : 'NO'),
+        totalYesVolume: account.totalYesVolume.toNumber(),
+        totalNoVolume: account.totalNoVolume.toNumber(),
+        authority: account.authority.toBase58(),
+        createdAt: new Date(account.createdAt.toNumber() * 1000).toISOString(),
+    };
+}
+function formatOrderBook(ob) {
+    return {
+        market: ob.market.toBase58(),
+        yesBids: ob.yesBids.map(o => ({
+            owner: o.owner.toBase58(),
+            price: o.price.toNumber(),
+            pricePercent: (o.price.toNumber() / 100).toFixed(2) + '%',
+            size: o.size.toNumber(),
+            timestamp: o.timestamp.toNumber(),
+            orderId: o.orderId.toNumber(),
+        })),
+        yesAsks: ob.yesAsks.map(o => ({
+            owner: o.owner.toBase58(),
+            price: o.price.toNumber(),
+            pricePercent: (o.price.toNumber() / 100).toFixed(2) + '%',
+            size: o.size.toNumber(),
+            timestamp: o.timestamp.toNumber(),
+            orderId: o.orderId.toNumber(),
+        })),
+        spread: ob.yesBids.length > 0 && ob.yesAsks.length > 0
+            ? ob.yesAsks[0].price.toNumber() - ob.yesBids[0].price.toNumber()
+            : null,
+        bestBid: ob.yesBids.length > 0 ? ob.yesBids[0].price.toNumber() : null,
+        bestAsk: ob.yesAsks.length > 0 ? ob.yesAsks[0].price.toNumber() : null,
+    };
+}
 function formatMarket(pubkey, account) {
     const totalPool = account.totalPool.toNumber();
     const outcomePools = account.outcomePools.map((p) => p.toNumber());

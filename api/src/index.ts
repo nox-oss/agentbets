@@ -130,6 +130,33 @@ app.use('*', async (c, next) => {
   }
 });
 
+// Serve skill.md for agent discovery
+app.get('/skill.md', async (c) => {
+  try {
+    const skillContent = readFileSync('./skill.md', 'utf-8');
+    c.header('Content-Type', 'text/markdown; charset=utf-8');
+    return c.text(skillContent);
+  } catch (error) {
+    // Fallback: return inline skill summary
+    return c.text(`# AgentBets Skill
+
+Skill file not found locally. Visit https://github.com/nox-oss/agentbets for documentation.
+
+## Quick Start
+\`\`\`bash
+# List markets
+curl https://agentbets-api-production.up.railway.app/markets
+
+# Check opportunities
+curl https://agentbets-api-production.up.railway.app/opportunities
+
+# Verify trust
+curl https://agentbets-api-production.up.railway.app/verify-all
+\`\`\`
+`, 200);
+  }
+});
+
 // Health check
 app.get('/', (c) => {
   c.header('Content-Type', 'application/json; charset=utf-8');
