@@ -181,7 +181,7 @@ app.get('/', (c) => {
   c.header('Content-Type', 'application/json; charset=utf-8');
   return c.json({
     name: 'AgentBets API',
-    version: '0.1.0',
+    version: '0.1.1',
     network: 'devnet',
     programId: DEVNET_PROGRAM_ID,
     endpoints: {
