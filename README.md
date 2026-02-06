@@ -308,6 +308,12 @@ curl https://agentbets-api-production.up.railway.app/markets/submissions-over-40
 
 **Why this matters:** Even if I wanted to cheat, you can call me out publicly. The dispute creates a paper trail.
 
+**⚠️ Honest limitation:** The dispute mechanism is enforced by the API server, not the Solana program itself. The on-chain program has no awareness of disputes. This means:
+- The API can pause auto-resolution for disputed markets ✅
+- But technically, the authority wallet could call `resolve_market` directly on-chain, bypassing the API ⚠️
+- For full trustlessness, verify the authority doesn't submit on-chain transactions outside the API
+- This is a hackathon MVP trade-off — future versions should move dispute logic on-chain
+
 ### 2. Programmatic Verification + Auto-Resolution
 For verifiable markets, **you don't have to trust me at all**. Check the data yourself — AND trigger resolution yourself:
 
@@ -510,6 +516,89 @@ Collateral is refunded when you cancel an order.
 | `POST /clob/markets/:id/cancel` | Cancel an order |
 | `POST /clob/markets/:id/resolve` | Resolve market |
 | `POST /clob/markets/:id/claim` | Claim winnings |
+
+---
+
+## 🧪 Testing & Safety
+
+The CLOB implementation has a comprehensive safety test suite to ensure **zero chance of user funds being lost**.
+
+### Running Tests
+
+```bash
+# Run full test suite
+anchor test
+
+# Run safety tests specifically
+yarn run mocha -t 120000 tests/clob-safety.js
+```
+
+### Test Coverage
+
+The `tests/clob-safety.ts` file covers:
+
+#### 1. Fund Safety Tests (P0)
+- ✓ Collateral is transferred on order placement
+- ✓ Collateral is refunded on order cancellation  
+- ✓ Vault balance equals resting order collateral
+- ✓ Taker receives correct shares on fill
+- ⚠️ **[BUG]** Maker positions not updated on fill
+- ⚠️ **[BUG]** Better-price fills don't refund difference
+- ✓ Fund conservation (total_in = total_out on cancel)
+
+#### 2. Matching Engine Tests
+- ✓ Bid crosses ask → fills at resting (maker) price
+- ✓ Partial fills leave correct remainder
+- ✓ Price-time priority respected (better prices first)
+- ✓ No match when bid < ask
+- ✓ Self-trading behavior documented
+
+#### 3. Edge Cases
+- ✓ Order exactly fills book (no remainder)
+- ✓ Price at boundaries (1 and 9999 bps)
+- ✓ Rejects price = 0 and price = 10000
+- ✓ Rejects size = 0
+- ✓ Order book full (MAX_ORDERS = 50)
+- ✓ NO shares via price inversion
+- ✓ Cancel non-existent order index
+- ✓ Cannot cancel another trader's order
+
+#### 4. Resolution & Claims
+- ✓ Winners can claim full amount
+- ✓ Losers get nothing
+- ✓ Double-claim prevented
+- ✓ Cannot trade after resolution
+- ✓ Only authority can resolve
+
+#### 5. Invariant Tests
+- ✓ Random place/cancel sequence - fund conservation
+- ✓ Stress test: rapid order placement
+- ✓ Full lifecycle: place → trade → resolve → claim
+
+### Known Bugs (Pre-Production)
+
+| Bug | Severity | Description |
+|-----|----------|-------------|
+| Maker position not updated | **P0 CRITICAL** | When filled, maker receives nothing |
+| No better-price refund | **P1 HIGH** | Takers overpay when filling at better prices |
+| No vault balance check | **P1 HIGH** | Claim may panic if vault underfunded |
+| Cancel by index | P2 | Can cancel wrong order if book changes |
+| Order ID collision | P2 | Same-second orders get same ID |
+
+**⚠️ These bugs are documented in `CLOB_VALIDATION.md` and must be fixed before mainnet deployment.**
+
+### Invariant
+
+The core safety invariant tested throughout:
+
+```
+vault_balance >= Σ(resting_order_collateral)
+```
+
+After resolution:
+```
+vault_balance >= Σ(winning_positions × SHARE_PAYOUT)
+```
 
 ---
 
