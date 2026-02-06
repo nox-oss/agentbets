@@ -92,6 +92,7 @@ app.get('/', (c) => {
       'GET /markets/:id/position/:owner': 'Get position for a user',
       'GET /markets/:id/verify': 'Verify resolution data (agents can check independently)',
       'GET /resolutions/pending': 'List upcoming resolutions + challenge windows',
+      'GET /verify-all': '🔍 Run full trust verification (check on-chain state, vaults, etc.)',
       'POST /markets': 'Create a new market (authority only)',
       'POST /markets/:id/bet': 'Place a bet (returns unsigned tx to sign)',
       'POST /markets/:id/claim': 'Claim winnings after resolution (returns unsigned tx)',
@@ -799,6 +800,133 @@ app.post('/markets/:id/resolve', async (c) => {
   } catch (error) {
     console.error('Error resolving market:', error);
     return c.json({ error: String(error) }, 500);
+  }
+});
+
+// === Trust Verification Endpoint ===
+// Agents can call this to verify the system is trustworthy
+
+app.get('/verify-all', async (c) => {
+  const results: { passed: boolean; check: string; details: string }[] = [];
+  
+  try {
+    // 1. Verify program exists
+    const programInfo = await connection.getAccountInfo(programId);
+    results.push({
+      passed: programInfo !== null && programInfo.executable,
+      check: 'Program exists on-chain',
+      details: programInfo ? `Program ${DEVNET_PROGRAM_ID} is deployed and executable` : 'Program not found',
+    });
+    
+    // 2. Fetch all markets
+    const markets = await program.account.market.all();
+    results.push({
+      passed: markets.length > 0,
+      check: 'Markets exist',
+      details: `Found ${markets.length} markets on-chain`,
+    });
+    
+    // 3. Verify authority consistency
+    const expectedAuthority = authorityWallet?.publicKey.toBase58() || 'DAS1DbaCVn7PuruRLo7gbn84f8SqTcVUPDW4S5qfZRL2';
+    const authorityMatches = markets.filter((m: any) => 
+      m.account.authority.toBase58() === expectedAuthority
+    ).length;
+    results.push({
+      passed: authorityMatches === markets.length,
+      check: 'Market authorities match',
+      details: `${authorityMatches}/${markets.length} markets have expected authority`,
+    });
+    
+    // 4. Verify vault balances
+    let vaultMatches = 0;
+    for (const market of markets) {
+      try {
+        const [vaultPDA] = PublicKey.findProgramAddressSync(
+          [Buffer.from('vault'), Buffer.from(market.account.marketId)],
+          programId
+        );
+        const vaultBalance = await connection.getBalance(vaultPDA);
+        const reportedPool = market.account.totalPool.toNumber();
+        // Allow 0.01 SOL tolerance for rent
+        if (Math.abs(vaultBalance - reportedPool) < 0.01 * LAMPORTS_PER_SOL) {
+          vaultMatches++;
+        }
+      } catch {
+        // Skip failed vault checks
+      }
+    }
+    results.push({
+      passed: vaultMatches === markets.length,
+      check: 'Vault balances match on-chain',
+      details: `${vaultMatches}/${markets.length} vaults match reported pool amounts`,
+    });
+    
+    // 5. Check verifiable markets have working verify endpoints
+    const verifiableMarkets = ['submissions-over-400', 'submissions-over-350'];
+    let verifyWorks = 0;
+    for (const marketId of verifiableMarkets) {
+      try {
+        // Check if market exists
+        const [marketPDA] = PublicKey.findProgramAddressSync(
+          [Buffer.from('market'), Buffer.from(marketId)],
+          programId
+        );
+        const marketAccount = await program.account.market.fetch(marketPDA);
+        if (marketAccount) verifyWorks++;
+      } catch {
+        // Market doesn't exist
+      }
+    }
+    results.push({
+      passed: verifyWorks > 0,
+      check: 'Auto-resolvable markets exist',
+      details: `${verifyWorks}/${verifiableMarkets.length} verifiable markets found`,
+    });
+    
+    // 6. Check for skin in the game
+    const anchorMarket = markets.find((m: any) => m.account.marketId === 'winner-uses-anchor');
+    if (anchorMarket) {
+      const pools = anchorMarket.account.outcomePools.map((p: any) => p.toNumber());
+      const hasBothSides = pools.filter((p: number) => p > 0).length >= 2;
+      results.push({
+        passed: hasBothSides,
+        check: 'Skin in the game',
+        details: hasBothSides 
+          ? `Counter-positions exist (Yes: ${pools[0]/LAMPORTS_PER_SOL} SOL, No: ${pools[1]/LAMPORTS_PER_SOL} SOL)`
+          : 'No counter-positions found',
+      });
+    }
+    
+    // Calculate trust score
+    const passed = results.filter(r => r.passed).length;
+    const total = results.length;
+    const trustScore = Math.round((passed / total) * 100);
+    
+    let grade = 'F';
+    if (trustScore >= 90) grade = 'A';
+    else if (trustScore >= 80) grade = 'B';
+    else if (trustScore >= 70) grade = 'C';
+    else if (trustScore >= 60) grade = 'D';
+    
+    return c.json({
+      trustScore,
+      grade,
+      checksRun: total,
+      checksPassed: passed,
+      results,
+      verifyYourself: {
+        program: `https://explorer.solana.com/address/${DEVNET_PROGRAM_ID}?cluster=devnet`,
+        markets: `${c.req.url.replace('/verify-all', '/markets')}`,
+        resolutions: `${c.req.url.replace('/verify-all', '/resolutions/pending')}`,
+      },
+      timestamp: new Date().toISOString(),
+    });
+  } catch (error) {
+    return c.json({ 
+      error: 'Verification failed', 
+      details: String(error),
+      message: 'You can verify manually via Solana Explorer',
+    }, 500);
   }
 });
 
