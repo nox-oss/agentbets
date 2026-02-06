@@ -31,7 +31,7 @@ interface PositionAccount {
 }
 
 // === Configuration ===
-const DEVNET_PROGRAM_ID = 'G59nkJ7khC1aKMr6eaRX1SssfeUuP7Ln8BpDj7ELkkcu';
+const DEVNET_PROGRAM_ID = 'FtNvaXJs5ZUbxPPq91XayvM4MauZyPgxJRrV16fGfn6H';
 const RPC_URL = process.env.RPC_URL || 'https://api.devnet.solana.com';
 const PORT = parseInt(process.env.PORT || '3000', 10);
 const AUTHORITY_KEYPAIR_PATH = process.env.AUTHORITY_KEYPAIR || `${process.env.HOME}/.config/solana/agentbets.json`;
