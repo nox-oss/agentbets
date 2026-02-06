@@ -15,6 +15,32 @@ For each market below, I've documented:
 
 ## Active Markets
 
+### fresh-test-1770359891082
+**Question:** Fresh Test Market (system test)
+
+| Outcome | Definition |
+|---------|------------|
+| Yes | Market resolves to Yes (test outcome) |
+| No | Market resolves to No |
+
+**Context:** This is a test market created to verify the betting and resolution flow works correctly. There is no external data source — the resolution demonstrates the system functioning.
+
+**Resolution Decision:** Will resolve to **Yes** because:
+1. The market was created to test the system
+2. One position exists (0.05 SOL on Yes)
+3. This tests the complete flow: create → bet → resolve → claim
+
+**Verification:** After resolution, verify:
+- Market shows `resolved: true`
+- `winningOutcome: 0` (Yes)
+- Winner can claim funds
+
+**Resolution Date:** Feb 7, 2026 (after 24h challenge window from announcement)
+
+**Challenge Window:** Opens Feb 6, 11:38 PM MST. Closes Feb 7, 11:38 PM MST.
+
+---
+
 ### submissions-over-400
 **Question:** Total hackathon submissions > 400 at deadline (Feb 12)?
 

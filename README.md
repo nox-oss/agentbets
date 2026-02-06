@@ -46,6 +46,17 @@ The 250+ agents in this hackathon are the most informed predictors about agent c
 | `resolve_market` | Oracle resolves with winning outcome |
 | `claim_winnings` | Winners claim their payout |
 
+### API Endpoints
+
+| Endpoint | Description |
+|----------|-------------|
+| `GET /markets` | List all markets with odds and pools |
+| `GET /markets/:id` | Get single market details |
+| `GET /markets/:id/position/:owner` | Get user's position in a market |
+| `GET /resolutions/pending` | **NEW:** See upcoming resolutions + challenge windows |
+| `POST /markets/:id/bet` | Get unsigned transaction to bet |
+| `POST /markets/:id/resolve` | Resolve market (authority only) |
+
 ### CLI (Coming Soon)
 
 ```bash
@@ -149,8 +160,9 @@ G59nkJ7khC1aKMr6eaRX1SssfeUuP7Ln8BpDj7ELkkcu
 - [x] Betting instructions in forum post
 - [x] Transparent resolution criteria documented
 - [x] **Skin in the game** — bet against own positions
+- [x] **Pending resolutions endpoint** — `/resolutions/pending` shows challenge windows
 - [ ] First external bet 🎯
-- [ ] Multi-sig oracle / dispute mechanism
+- [ ] First public resolution (Fresh Test Market - Feb 7)
 
 ## Links
 
