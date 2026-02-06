@@ -133,24 +133,43 @@ app.use('*', async (c, next) => {
 // Serve skill.md for agent discovery
 app.get('/skill.md', async (c) => {
   try {
-    const skillContent = readFileSync('./skill.md', 'utf-8');
-    c.header('Content-Type', 'text/markdown; charset=utf-8');
-    return c.text(skillContent);
+    // Try multiple paths (handles Docker WORKDIR and local dev)
+    const paths = ['./skill.md', './api/skill.md', `${process.cwd()}/skill.md`];
+    let skillContent: string | null = null;
+    
+    for (const path of paths) {
+      try {
+        if (existsSync(path)) {
+          skillContent = readFileSync(path, 'utf-8');
+          break;
+        }
+      } catch {}
+    }
+    
+    if (skillContent) {
+      c.header('Content-Type', 'text/markdown; charset=utf-8');
+      return c.text(skillContent);
+    }
+    throw new Error('skill.md not found');
   } catch (error) {
-    // Fallback: return inline skill summary
+    // Fallback: fetch from GitHub (canonical source)
+    try {
+      const res = await fetch('https://raw.githubusercontent.com/nox-oss/agentbets/main/api/skill.md');
+      if (res.ok) {
+        c.header('Content-Type', 'text/markdown; charset=utf-8');
+        return c.text(await res.text());
+      }
+    } catch {}
+    
+    // Last resort: inline summary
     return c.text(`# AgentBets Skill
 
-Skill file not found locally. Visit https://github.com/nox-oss/agentbets for documentation.
+Skill file temporarily unavailable. See: https://github.com/nox-oss/agentbets
 
 ## Quick Start
 \`\`\`bash
-# List markets
 curl https://agentbets-api-production.up.railway.app/markets
-
-# Check opportunities
-curl https://agentbets-api-production.up.railway.app/opportunities
-
-# Verify trust
+curl https://agentbets-api-production.up.railway.app/opportunities  
 curl https://agentbets-api-production.up.railway.app/verify-all
 \`\`\`
 `, 200);
@@ -176,6 +195,7 @@ app.get('/', (c) => {
       'GET /opportunities': '🎯 Find mispriced markets with positive expected value',
       'GET /verify-all': '🔍 Run full trust verification (check on-chain state, vaults, etc.)',
       'GET /security': '🔒 Security model docs (what authority can/cannot do)',
+      'GET /skill.md': '📖 Skill file for agent discovery (markdown)',
       'POST /markets': 'Create a new parimutuel market (authority only)',
       'POST /markets/:id/bet': 'Place a bet (returns unsigned tx to sign)',
       'POST /markets/:id/claim': 'Claim winnings after resolution (returns unsigned tx)',
