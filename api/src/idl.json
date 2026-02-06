@@ -10,7 +10,7 @@
     {
       "name": "buy_shares",
       "docs": [
-        "Buy shares in an outcome (AMM-based)"
+        "Buy shares in an outcome (parimutuel)"
       ],
       "discriminator": [
         40,
@@ -78,9 +78,177 @@
       ]
     },
     {
+      "name": "cancel_order",
+      "docs": [
+        "Cancel an order"
+      ],
+      "discriminator": [
+        95,
+        129,
+        237,
+        240,
+        8,
+        49,
+        223,
+        132
+      ],
+      "accounts": [
+        {
+          "name": "market"
+        },
+        {
+          "name": "order_book",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  111,
+                  114,
+                  100,
+                  101,
+                  114,
+                  95,
+                  98,
+                  111,
+                  111,
+                  107
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "market"
+              }
+            ]
+          }
+        },
+        {
+          "name": "vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  97,
+                  117,
+                  108,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "market"
+              }
+            ]
+          }
+        },
+        {
+          "name": "trader",
+          "writable": true,
+          "signer": true
+        }
+      ],
+      "args": [
+        {
+          "name": "is_bid",
+          "type": "bool"
+        },
+        {
+          "name": "order_index",
+          "type": "u8"
+        }
+      ]
+    },
+    {
+      "name": "claim_clob_winnings",
+      "docs": [
+        "Claim winnings from a CLOB market"
+      ],
+      "discriminator": [
+        168,
+        69,
+        112,
+        100,
+        135,
+        157,
+        183,
+        5
+      ],
+      "accounts": [
+        {
+          "name": "market"
+        },
+        {
+          "name": "vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  97,
+                  117,
+                  108,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "market"
+              }
+            ]
+          }
+        },
+        {
+          "name": "position",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  108,
+                  111,
+                  98,
+                  95,
+                  112,
+                  111,
+                  115,
+                  105,
+                  116,
+                  105,
+                  111,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "market"
+              },
+              {
+                "kind": "account",
+                "path": "claimer"
+              }
+            ]
+          }
+        },
+        {
+          "name": "claimer",
+          "writable": true,
+          "signer": true
+        }
+      ],
+      "args": []
+    },
+    {
       "name": "claim_winnings",
       "docs": [
-        "Claim winnings after resolution"
+        "Claim winnings after resolution (parimutuel)"
       ],
       "discriminator": [
         161,
@@ -135,9 +303,127 @@
       "args": []
     },
     {
+      "name": "create_clob_market",
+      "docs": [
+        "Create a CLOB market with order book"
+      ],
+      "discriminator": [
+        158,
+        165,
+        236,
+        157,
+        165,
+        251,
+        14,
+        41
+      ],
+      "accounts": [
+        {
+          "name": "market",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  108,
+                  111,
+                  98,
+                  95,
+                  109,
+                  97,
+                  114,
+                  107,
+                  101,
+                  116
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "market_id"
+              }
+            ]
+          }
+        },
+        {
+          "name": "order_book",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  111,
+                  114,
+                  100,
+                  101,
+                  114,
+                  95,
+                  98,
+                  111,
+                  111,
+                  107
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "market"
+              }
+            ]
+          }
+        },
+        {
+          "name": "vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  97,
+                  117,
+                  108,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "market"
+              }
+            ]
+          }
+        },
+        {
+          "name": "authority",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "market_id",
+          "type": "string"
+        },
+        {
+          "name": "question",
+          "type": "string"
+        },
+        {
+          "name": "resolution_time",
+          "type": "i64"
+        }
+      ]
+    },
+    {
       "name": "create_market",
       "docs": [
-        "Create a new prediction market"
+        "Create a new prediction market (parimutuel)"
       ],
       "discriminator": [
         103,
@@ -205,9 +491,177 @@
       ]
     },
     {
+      "name": "place_order",
+      "docs": [
+        "Place an order in the CLOB",
+        "side: 0 = BID (buy), 1 = ASK (sell)",
+        "is_yes: true = YES shares, false = NO shares",
+        "price: basis points 0-10000 (0% to 100%)",
+        "size: number of shares"
+      ],
+      "discriminator": [
+        51,
+        194,
+        155,
+        175,
+        109,
+        130,
+        96,
+        106
+      ],
+      "accounts": [
+        {
+          "name": "market",
+          "writable": true
+        },
+        {
+          "name": "order_book",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  111,
+                  114,
+                  100,
+                  101,
+                  114,
+                  95,
+                  98,
+                  111,
+                  111,
+                  107
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "market"
+              }
+            ]
+          }
+        },
+        {
+          "name": "vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  97,
+                  117,
+                  108,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "market"
+              }
+            ]
+          }
+        },
+        {
+          "name": "position",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  108,
+                  111,
+                  98,
+                  95,
+                  112,
+                  111,
+                  115,
+                  105,
+                  116,
+                  105,
+                  111,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "market"
+              },
+              {
+                "kind": "account",
+                "path": "trader"
+              }
+            ]
+          }
+        },
+        {
+          "name": "trader",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "side",
+          "type": "u8"
+        },
+        {
+          "name": "is_yes",
+          "type": "bool"
+        },
+        {
+          "name": "price",
+          "type": "u64"
+        },
+        {
+          "name": "size",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "resolve_clob_market",
+      "docs": [
+        "Resolve the CLOB market"
+      ],
+      "discriminator": [
+        22,
+        178,
+        43,
+        202,
+        166,
+        30,
+        228,
+        11
+      ],
+      "accounts": [
+        {
+          "name": "market",
+          "writable": true
+        },
+        {
+          "name": "authority",
+          "signer": true
+        }
+      ],
+      "args": [
+        {
+          "name": "winning_side",
+          "type": "u8"
+        }
+      ]
+    },
+    {
       "name": "resolve_market",
       "docs": [
-        "Resolve market with winning outcome"
+        "Resolve market with winning outcome (parimutuel)"
       ],
       "discriminator": [
         155,
@@ -239,6 +693,32 @@
   ],
   "accounts": [
     {
+      "name": "ClobMarket",
+      "discriminator": [
+        237,
+        120,
+        172,
+        81,
+        128,
+        159,
+        184,
+        78
+      ]
+    },
+    {
+      "name": "ClobPosition",
+      "discriminator": [
+        27,
+        59,
+        43,
+        70,
+        183,
+        254,
+        158,
+        222
+      ]
+    },
+    {
       "name": "Market",
       "discriminator": [
         219,
@@ -249,6 +729,19 @@
         227,
         198,
         154
+      ]
+    },
+    {
+      "name": "OrderBook",
+      "discriminator": [
+        55,
+        230,
+        125,
+        218,
+        149,
+        39,
+        65,
+        248
       ]
     },
     {
@@ -268,51 +761,159 @@
   "errors": [
     {
       "code": 6000,
-      "name": "InvalidOutcomeCount",
-      "msg": "Market must have 2-10 outcomes"
-    },
-    {
-      "code": 6001,
       "name": "MarketIdTooLong",
       "msg": "Market ID too long (max 32 chars)"
     },
     {
-      "code": 6002,
+      "code": 6001,
       "name": "QuestionTooLong",
       "msg": "Question too long (max 256 chars)"
     },
     {
+      "code": 6002,
+      "name": "InvalidPrice",
+      "msg": "Invalid price (must be 1-9999 bps)"
+    },
+    {
       "code": 6003,
-      "name": "InvalidOutcome",
-      "msg": "Invalid outcome index"
+      "name": "InvalidSize",
+      "msg": "Invalid size (must be > 0)"
     },
     {
       "code": 6004,
-      "name": "MarketAlreadyResolved",
-      "msg": "Market already resolved"
+      "name": "MarketResolved",
+      "msg": "Market is resolved"
     },
     {
       "code": 6005,
-      "name": "MarketNotResolved",
-      "msg": "Market not yet resolved"
+      "name": "MarketExpired",
+      "msg": "Market has expired"
     },
     {
       "code": 6006,
-      "name": "MarketResolved",
-      "msg": "Market is resolved, no more trading"
+      "name": "OrderBookFull",
+      "msg": "Order book is full"
     },
     {
       "code": 6007,
-      "name": "NoWinningShares",
-      "msg": "No winning shares to claim"
+      "name": "InvalidOrderIndex",
+      "msg": "Invalid order index"
     },
     {
       "code": 6008,
+      "name": "NotOrderOwner",
+      "msg": "Not the order owner"
+    },
+    {
+      "code": 6009,
+      "name": "InvalidOutcome",
+      "msg": "Invalid outcome"
+    },
+    {
+      "code": 6010,
+      "name": "AlreadyResolved",
+      "msg": "Market already resolved"
+    },
+    {
+      "code": 6011,
       "name": "Unauthorized",
       "msg": "Unauthorized"
+    },
+    {
+      "code": 6012,
+      "name": "NotResolved",
+      "msg": "Market not resolved yet"
+    },
+    {
+      "code": 6013,
+      "name": "NoWinnings",
+      "msg": "No winnings to claim"
+    },
+    {
+      "code": 6014,
+      "name": "Overflow",
+      "msg": "Arithmetic overflow"
     }
   ],
   "types": [
+    {
+      "name": "ClobMarket",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "authority",
+            "type": "pubkey"
+          },
+          {
+            "name": "market_id",
+            "type": "string"
+          },
+          {
+            "name": "question",
+            "type": "string"
+          },
+          {
+            "name": "resolution_time",
+            "type": "i64"
+          },
+          {
+            "name": "resolved",
+            "type": "bool"
+          },
+          {
+            "name": "winning_side",
+            "type": {
+              "option": "u8"
+            }
+          },
+          {
+            "name": "created_at",
+            "type": "i64"
+          },
+          {
+            "name": "total_yes_volume",
+            "type": "u64"
+          },
+          {
+            "name": "total_no_volume",
+            "type": "u64"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "ClobPosition",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "owner",
+            "type": "pubkey"
+          },
+          {
+            "name": "market",
+            "type": "pubkey"
+          },
+          {
+            "name": "yes_shares",
+            "type": "u64"
+          },
+          {
+            "name": "no_shares",
+            "type": "u64"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
     {
       "name": "Market",
       "type": {
@@ -363,6 +964,70 @@
           {
             "name": "created_at",
             "type": "i64"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "Order",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "owner",
+            "type": "pubkey"
+          },
+          {
+            "name": "price",
+            "type": "u64"
+          },
+          {
+            "name": "size",
+            "type": "u64"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          },
+          {
+            "name": "order_id",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "OrderBook",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "market",
+            "type": "pubkey"
+          },
+          {
+            "name": "yes_bids",
+            "type": {
+              "vec": {
+                "defined": {
+                  "name": "Order"
+                }
+              }
+            }
+          },
+          {
+            "name": "yes_asks",
+            "type": {
+              "vec": {
+                "defined": {
+                  "name": "Order"
+                }
+              }
+            }
           },
           {
             "name": "bump",

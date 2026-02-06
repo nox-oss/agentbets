@@ -435,6 +435,22 @@ G59nkJ7khC1aKMr6eaRX1SssfeUuP7Ln8BpDj7ELkkcu
 
 🚧 **Live on devnet** — Day 5 of 10 (Feb 6, 2026)
 
+### 🔥 TONIGHT: First Public Auto-Resolution
+
+**Fresh Test Market resolves at 06:38 UTC (Feb 7) / 11:38 PM MST (Feb 6)**
+
+```bash
+# Check countdown
+curl https://agentbets-api-production.up.railway.app/markets/fresh-test-1770359891082/verify | jq '.autoResolve'
+
+# After resolution time — ANYONE can trigger (no human discretion)
+curl -X POST https://agentbets-api-production.up.railway.app/markets/fresh-test-1770359891082/auto-resolve
+```
+
+This is the first public resolution. The system proves itself: verifiable data → programmatic resolution → winners claim. No trust required.
+
+---
+
 **Current hackathon submissions:** 128 projects (tracking live via API)
 
 - [x] Program deployed to devnet

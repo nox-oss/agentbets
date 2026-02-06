@@ -1435,7 +1435,563 @@ app.get('/security', async (c) => {
   });
 });
 
+// ===========================================
+// CLOB (Order Book) Endpoints
+// ===========================================
+
+// CLOB Types
+interface ClobMarketAccount {
+  authority: PublicKey;
+  marketId: string;
+  question: string;
+  resolutionTime: BN;
+  resolved: boolean;
+  winningSide: number | null;
+  createdAt: BN;
+  totalYesVolume: BN;
+  totalNoVolume: BN;
+  bump: number;
+}
+
+interface OrderBookAccount {
+  market: PublicKey;
+  yesBids: Array<{owner: PublicKey; price: BN; size: BN; timestamp: BN; orderId: BN}>;
+  yesAsks: Array<{owner: PublicKey; price: BN; size: BN; timestamp: BN; orderId: BN}>;
+  bump: number;
+}
+
+// List all CLOB markets
+app.get('/clob/markets', async (c) => {
+  try {
+    const markets = await program.account.clobMarket.all();
+    
+    return c.json({
+      markets: markets.map((m: { publicKey: PublicKey; account: ClobMarketAccount }) => formatClobMarket(m.publicKey, m.account)),
+      count: markets.length,
+    });
+  } catch (error) {
+    console.error('Error fetching CLOB markets:', error);
+    return c.json({ error: 'Failed to fetch CLOB markets' }, 500);
+  }
+});
+
+// Get single CLOB market with order book
+app.get('/clob/markets/:id', async (c) => {
+  const marketId = c.req.param('id');
+  
+  try {
+    let marketPubkey: PublicKey;
+    try {
+      marketPubkey = new PublicKey(marketId);
+    } catch {
+      const [pda] = PublicKey.findProgramAddressSync(
+        [Buffer.from('clob_market'), Buffer.from(marketId)],
+        programId
+      );
+      marketPubkey = pda;
+    }
+    
+    const market = await program.account.clobMarket.fetch(marketPubkey);
+    
+    // Get order book
+    const [orderBookPda] = PublicKey.findProgramAddressSync(
+      [Buffer.from('order_book'), marketPubkey.toBuffer()],
+      programId
+    );
+    
+    let orderBook = null;
+    try {
+      const ob = await program.account.orderBook.fetch(orderBookPda);
+      orderBook = formatOrderBook(ob);
+    } catch (e) {
+      // Order book may not exist yet
+    }
+    
+    return c.json({
+      market: formatClobMarket(marketPubkey, market),
+      orderBook,
+    });
+  } catch (error) {
+    console.error('Error fetching CLOB market:', error);
+    return c.json({ error: 'CLOB market not found' }, 404);
+  }
+});
+
+// Create a CLOB market
+app.post('/clob/markets', async (c) => {
+  if (!authorityWallet) {
+    return c.json({ error: 'Authority wallet not configured' }, 503);
+  }
+  
+  try {
+    const body = await c.req.json();
+    const { marketId, question, resolutionTime } = body;
+    
+    if (!marketId || !question || !resolutionTime) {
+      return c.json({ 
+        error: 'Missing required fields: marketId, question, resolutionTime' 
+      }, 400);
+    }
+    
+    const [marketPda] = PublicKey.findProgramAddressSync(
+      [Buffer.from('clob_market'), Buffer.from(marketId)],
+      programId
+    );
+    
+    const [orderBookPda] = PublicKey.findProgramAddressSync(
+      [Buffer.from('order_book'), marketPda.toBuffer()],
+      programId
+    );
+    
+    const [vaultPda] = PublicKey.findProgramAddressSync(
+      [Buffer.from('vault'), marketPda.toBuffer()],
+      programId
+    );
+    
+    const tx = await program.methods
+      .createClobMarket(marketId, question, new BN(resolutionTime))
+      .accounts({
+        market: marketPda,
+        orderBook: orderBookPda,
+        vault: vaultPda,
+        authority: authorityWallet.publicKey,
+        systemProgram: SystemProgram.programId,
+      })
+      .signers([authorityWallet])
+      .rpc();
+    
+    console.log(`CLOB Market created: ${marketId} (tx: ${tx})`);
+    
+    return c.json({
+      success: true,
+      marketId,
+      marketPubkey: marketPda.toBase58(),
+      orderBookPubkey: orderBookPda.toBase58(),
+      vaultPubkey: vaultPda.toBase58(),
+      txSignature: tx,
+    });
+  } catch (error) {
+    console.error('Error creating CLOB market:', error);
+    return c.json({ error: String(error) }, 500);
+  }
+});
+
+// Place an order in the CLOB
+app.post('/clob/markets/:id/order', async (c) => {
+  const marketId = c.req.param('id');
+  
+  try {
+    const body = await c.req.json();
+    const { side, isYes, price, size, traderPubkey, signedTx } = body;
+    
+    let marketPubkey: PublicKey;
+    try {
+      marketPubkey = new PublicKey(marketId);
+    } catch {
+      const [pda] = PublicKey.findProgramAddressSync(
+        [Buffer.from('clob_market'), Buffer.from(marketId)],
+        programId
+      );
+      marketPubkey = pda;
+    }
+    
+    if (signedTx) {
+      const txBuffer = Buffer.from(signedTx, 'base64');
+      const sig = await connection.sendRawTransaction(txBuffer);
+      await connection.confirmTransaction(sig, 'confirmed');
+      return c.json({ success: true, txSignature: sig });
+    }
+    
+    if (side === undefined || isYes === undefined || !price || !size || !traderPubkey) {
+      return c.json({ 
+        error: 'Missing required fields: side (0=bid, 1=ask), isYes, price (bps), size, traderPubkey' 
+      }, 400);
+    }
+    
+    const trader = new PublicKey(traderPubkey);
+    
+    const [orderBookPda] = PublicKey.findProgramAddressSync(
+      [Buffer.from('order_book'), marketPubkey.toBuffer()],
+      programId
+    );
+    
+    const [vaultPda] = PublicKey.findProgramAddressSync(
+      [Buffer.from('vault'), marketPubkey.toBuffer()],
+      programId
+    );
+    
+    const [positionPda] = PublicKey.findProgramAddressSync(
+      [Buffer.from('clob_position'), marketPubkey.toBuffer(), trader.toBuffer()],
+      programId
+    );
+    
+    const ix = await program.methods
+      .placeOrder(side, isYes, new BN(price), new BN(size))
+      .accounts({
+        market: marketPubkey,
+        orderBook: orderBookPda,
+        vault: vaultPda,
+        position: positionPda,
+        trader,
+        systemProgram: SystemProgram.programId,
+      })
+      .instruction();
+    
+    const { blockhash } = await connection.getLatestBlockhash();
+    const tx = new (await import('@solana/web3.js')).Transaction({
+      recentBlockhash: blockhash,
+      feePayer: trader,
+    }).add(ix);
+    
+    const serialized = tx.serialize({
+      requireAllSignatures: false,
+      verifySignatures: false,
+    }).toString('base64');
+    
+    // Calculate collateral required
+    const effectivePrice = isYes ? price : (10000 - price);
+    const effectiveSide = isYes ? side : (side === 0 ? 1 : 0);
+    const collateral = effectiveSide === 0 
+      ? effectivePrice * size  // Buying: pay price
+      : (10000 - effectivePrice) * size; // Selling: lock (10000 - price)
+    
+    return c.json({
+      unsignedTx: serialized,
+      marketPubkey: marketPubkey.toBase58(),
+      positionPda: positionPda.toBase58(),
+      orderDetails: {
+        side: side === 0 ? 'BID' : 'ASK',
+        asset: isYes ? 'YES' : 'NO',
+        price: price,
+        pricePercent: (price / 100).toFixed(2) + '%',
+        size: size,
+        collateralLamports: collateral,
+        collateralNote: `${(collateral / LAMPORTS_PER_SOL).toFixed(6)} SOL will be locked`,
+      },
+      message: 'Sign this transaction with your wallet and submit via signedTx field',
+    });
+  } catch (error) {
+    console.error('Error placing order:', error);
+    return c.json({ error: String(error) }, 500);
+  }
+});
+
+// Cancel an order
+app.post('/clob/markets/:id/cancel', async (c) => {
+  const marketId = c.req.param('id');
+  
+  try {
+    const body = await c.req.json();
+    const { isBid, orderIndex, traderPubkey, signedTx } = body;
+    
+    let marketPubkey: PublicKey;
+    try {
+      marketPubkey = new PublicKey(marketId);
+    } catch {
+      const [pda] = PublicKey.findProgramAddressSync(
+        [Buffer.from('clob_market'), Buffer.from(marketId)],
+        programId
+      );
+      marketPubkey = pda;
+    }
+    
+    if (signedTx) {
+      const txBuffer = Buffer.from(signedTx, 'base64');
+      const sig = await connection.sendRawTransaction(txBuffer);
+      await connection.confirmTransaction(sig, 'confirmed');
+      return c.json({ success: true, txSignature: sig });
+    }
+    
+    if (isBid === undefined || orderIndex === undefined || !traderPubkey) {
+      return c.json({ 
+        error: 'Missing required fields: isBid, orderIndex, traderPubkey' 
+      }, 400);
+    }
+    
+    const trader = new PublicKey(traderPubkey);
+    
+    const [orderBookPda] = PublicKey.findProgramAddressSync(
+      [Buffer.from('order_book'), marketPubkey.toBuffer()],
+      programId
+    );
+    
+    const [vaultPda] = PublicKey.findProgramAddressSync(
+      [Buffer.from('vault'), marketPubkey.toBuffer()],
+      programId
+    );
+    
+    const ix = await program.methods
+      .cancelOrder(isBid, orderIndex)
+      .accounts({
+        market: marketPubkey,
+        orderBook: orderBookPda,
+        vault: vaultPda,
+        trader,
+      })
+      .instruction();
+    
+    const { blockhash } = await connection.getLatestBlockhash();
+    const tx = new (await import('@solana/web3.js')).Transaction({
+      recentBlockhash: blockhash,
+      feePayer: trader,
+    }).add(ix);
+    
+    const serialized = tx.serialize({
+      requireAllSignatures: false,
+      verifySignatures: false,
+    }).toString('base64');
+    
+    return c.json({
+      unsignedTx: serialized,
+      message: 'Sign this transaction to cancel your order and receive collateral refund',
+    });
+  } catch (error) {
+    console.error('Error cancelling order:', error);
+    return c.json({ error: String(error) }, 500);
+  }
+});
+
+// Resolve a CLOB market
+app.post('/clob/markets/:id/resolve', async (c) => {
+  if (!authorityWallet) {
+    return c.json({ error: 'Authority wallet not configured' }, 503);
+  }
+  
+  const marketId = c.req.param('id');
+  
+  try {
+    const body = await c.req.json();
+    const { winningSide } = body; // 0 = YES, 1 = NO
+    
+    if (winningSide === undefined || (winningSide !== 0 && winningSide !== 1)) {
+      return c.json({ error: 'winningSide must be 0 (YES wins) or 1 (NO wins)' }, 400);
+    }
+    
+    let marketPubkey: PublicKey;
+    try {
+      marketPubkey = new PublicKey(marketId);
+    } catch {
+      const [pda] = PublicKey.findProgramAddressSync(
+        [Buffer.from('clob_market'), Buffer.from(marketId)],
+        programId
+      );
+      marketPubkey = pda;
+    }
+    
+    const tx = await program.methods
+      .resolveClobMarket(winningSide)
+      .accounts({
+        market: marketPubkey,
+        authority: authorityWallet.publicKey,
+      })
+      .signers([authorityWallet])
+      .rpc();
+    
+    return c.json({
+      success: true,
+      winningSide,
+      winner: winningSide === 0 ? 'YES' : 'NO',
+      txSignature: tx,
+    });
+  } catch (error) {
+    console.error('Error resolving CLOB market:', error);
+    return c.json({ error: String(error) }, 500);
+  }
+});
+
+// Claim CLOB winnings
+app.post('/clob/markets/:id/claim', async (c) => {
+  const marketId = c.req.param('id');
+  
+  try {
+    const body = await c.req.json();
+    const { claimerPubkey, signedTx } = body;
+    
+    let marketPubkey: PublicKey;
+    try {
+      marketPubkey = new PublicKey(marketId);
+    } catch {
+      const [pda] = PublicKey.findProgramAddressSync(
+        [Buffer.from('clob_market'), Buffer.from(marketId)],
+        programId
+      );
+      marketPubkey = pda;
+    }
+    
+    if (signedTx) {
+      const txBuffer = Buffer.from(signedTx, 'base64');
+      const sig = await connection.sendRawTransaction(txBuffer);
+      await connection.confirmTransaction(sig, 'confirmed');
+      return c.json({ success: true, txSignature: sig });
+    }
+    
+    if (!claimerPubkey) {
+      return c.json({ error: 'Missing claimerPubkey' }, 400);
+    }
+    
+    const claimer = new PublicKey(claimerPubkey);
+    
+    const [vaultPda] = PublicKey.findProgramAddressSync(
+      [Buffer.from('vault'), marketPubkey.toBuffer()],
+      programId
+    );
+    
+    const [positionPda] = PublicKey.findProgramAddressSync(
+      [Buffer.from('clob_position'), marketPubkey.toBuffer(), claimer.toBuffer()],
+      programId
+    );
+    
+    // Check position
+    let position;
+    try {
+      position = await program.account.clobPosition.fetch(positionPda);
+    } catch {
+      return c.json({ error: 'No position found' }, 404);
+    }
+    
+    // Check market
+    const market = await program.account.clobMarket.fetch(marketPubkey);
+    if (!market.resolved) {
+      return c.json({ error: 'Market not resolved yet' }, 400);
+    }
+    
+    const winningSide = market.winningSide;
+    const winningShares = winningSide === 0 ? position.yesShares.toNumber() : position.noShares.toNumber();
+    const payout = winningShares * 10000; // 10000 lamports per share
+    
+    if (payout === 0) {
+      return c.json({ 
+        error: 'No winning shares to claim',
+        position: {
+          yesShares: position.yesShares.toNumber(),
+          noShares: position.noShares.toNumber(),
+        },
+        winningSide: winningSide === 0 ? 'YES' : 'NO',
+      }, 400);
+    }
+    
+    const ix = await program.methods
+      .claimClobWinnings()
+      .accounts({
+        market: marketPubkey,
+        vault: vaultPda,
+        position: positionPda,
+        claimer,
+      })
+      .instruction();
+    
+    const { blockhash } = await connection.getLatestBlockhash();
+    const tx = new (await import('@solana/web3.js')).Transaction({
+      recentBlockhash: blockhash,
+      feePayer: claimer,
+    }).add(ix);
+    
+    const serialized = tx.serialize({
+      requireAllSignatures: false,
+      verifySignatures: false,
+    }).toString('base64');
+    
+    return c.json({
+      unsignedTx: serialized,
+      payout: {
+        winningSide: winningSide === 0 ? 'YES' : 'NO',
+        winningShares,
+        payoutLamports: payout,
+        payoutSol: payout / LAMPORTS_PER_SOL,
+      },
+      message: 'Sign this transaction to claim your winnings',
+    });
+  } catch (error) {
+    console.error('Error claiming winnings:', error);
+    return c.json({ error: String(error) }, 500);
+  }
+});
+
+// Get CLOB position
+app.get('/clob/markets/:id/position/:owner', async (c) => {
+  const marketId = c.req.param('id');
+  const owner = c.req.param('owner');
+  
+  try {
+    let marketPubkey: PublicKey;
+    try {
+      marketPubkey = new PublicKey(marketId);
+    } catch {
+      const [pda] = PublicKey.findProgramAddressSync(
+        [Buffer.from('clob_market'), Buffer.from(marketId)],
+        programId
+      );
+      marketPubkey = pda;
+    }
+    
+    const ownerPubkey = new PublicKey(owner);
+    const [positionPda] = PublicKey.findProgramAddressSync(
+      [Buffer.from('clob_position'), marketPubkey.toBuffer(), ownerPubkey.toBuffer()],
+      programId
+    );
+    
+    const position = await program.account.clobPosition.fetch(positionPda);
+    
+    return c.json({
+      position: {
+        pubkey: positionPda.toBase58(),
+        owner: position.owner.toBase58(),
+        market: position.market.toBase58(),
+        yesShares: position.yesShares.toNumber(),
+        noShares: position.noShares.toNumber(),
+      },
+    });
+  } catch (error) {
+    return c.json({ error: 'Position not found' }, 404);
+  }
+});
+
 // === Helper Functions ===
+
+function formatClobMarket(pubkey: PublicKey, account: ClobMarketAccount) {
+  return {
+    pubkey: pubkey.toBase58(),
+    marketId: account.marketId,
+    question: account.question,
+    type: 'CLOB',
+    resolutionTime: account.resolutionTime.toNumber(),
+    resolutionDate: new Date(account.resolutionTime.toNumber() * 1000).toISOString(),
+    resolved: account.resolved,
+    winningSide: account.winningSide,
+    winnerName: account.winningSide === null ? null : (account.winningSide === 0 ? 'YES' : 'NO'),
+    totalYesVolume: account.totalYesVolume.toNumber(),
+    totalNoVolume: account.totalNoVolume.toNumber(),
+    authority: account.authority.toBase58(),
+    createdAt: new Date(account.createdAt.toNumber() * 1000).toISOString(),
+  };
+}
+
+function formatOrderBook(ob: OrderBookAccount) {
+  return {
+    market: ob.market.toBase58(),
+    yesBids: ob.yesBids.map(o => ({
+      owner: o.owner.toBase58(),
+      price: o.price.toNumber(),
+      pricePercent: (o.price.toNumber() / 100).toFixed(2) + '%',
+      size: o.size.toNumber(),
+      timestamp: o.timestamp.toNumber(),
+      orderId: o.orderId.toNumber(),
+    })),
+    yesAsks: ob.yesAsks.map(o => ({
+      owner: o.owner.toBase58(),
+      price: o.price.toNumber(),
+      pricePercent: (o.price.toNumber() / 100).toFixed(2) + '%',
+      size: o.size.toNumber(),
+      timestamp: o.timestamp.toNumber(),
+      orderId: o.orderId.toNumber(),
+    })),
+    spread: ob.yesBids.length > 0 && ob.yesAsks.length > 0 
+      ? ob.yesAsks[0].price.toNumber() - ob.yesBids[0].price.toNumber()
+      : null,
+    bestBid: ob.yesBids.length > 0 ? ob.yesBids[0].price.toNumber() : null,
+    bestAsk: ob.yesAsks.length > 0 ? ob.yesAsks[0].price.toNumber() : null,
+  };
+}
 
 function formatMarket(pubkey: PublicKey, account: MarketAccount) {
   const totalPool = account.totalPool.toNumber();
