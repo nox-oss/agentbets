@@ -95,7 +95,8 @@ app.get('/', (c) => {
       'POST /markets': 'Create a new market (authority only)',
       'POST /markets/:id/bet': 'Place a bet (returns unsigned tx to sign)',
       'POST /markets/:id/claim': 'Claim winnings after resolution (returns unsigned tx)',
-      'POST /markets/:id/resolve': 'Resolve market (authority only)',
+      'POST /markets/:id/auto-resolve': 'Auto-resolve verifiable markets (anyone can trigger)',
+      'POST /markets/:id/resolve': 'Resolve market manually (authority only)',
     },
   });
 });
@@ -636,6 +637,121 @@ app.post('/markets/:id/claim', async (c) => {
     });
   } catch (error) {
     console.error('Error claiming winnings:', error);
+    return c.json({ error: String(error) }, 500);
+  }
+});
+
+// Auto-resolve market (anyone can trigger for verifiable markets)
+// Removes human discretion - the data determines the outcome
+app.post('/markets/:id/auto-resolve', async (c) => {
+  if (!authorityWallet) {
+    return c.json({ error: 'Authority wallet not configured' }, 503);
+  }
+  
+  const marketId = c.req.param('id');
+  
+  try {
+    // Get market pubkey
+    let marketPubkey: PublicKey;
+    try {
+      marketPubkey = new PublicKey(marketId);
+    } catch {
+      const [pda] = PublicKey.findProgramAddressSync(
+        [Buffer.from('market'), Buffer.from(marketId)],
+        programId
+      );
+      marketPubkey = pda;
+    }
+    
+    // Fetch market data
+    const market = await program.account.market.fetch(marketPubkey);
+    const marketIdStr = market.marketId;
+    const now = Math.floor(Date.now() / 1000);
+    const resolutionTime = market.resolutionTime.toNumber();
+    
+    // Check if already resolved
+    if (market.resolved) {
+      return c.json({ 
+        error: 'Market already resolved',
+        winningOutcome: market.winningOutcome,
+        winningOutcomeName: market.outcomes[market.winningOutcome as number],
+      }, 400);
+    }
+    
+    // Check if resolution time has passed
+    if (now < resolutionTime) {
+      const hoursRemaining = ((resolutionTime - now) / 3600).toFixed(1);
+      return c.json({ 
+        error: 'Resolution time has not passed yet',
+        resolutionTime,
+        resolutionDate: new Date(resolutionTime * 1000).toISOString(),
+        hoursRemaining,
+      }, 400);
+    }
+    
+    // Only auto-resolve verifiable markets (submissions count)
+    if (marketIdStr !== 'submissions-over-400' && marketIdStr !== 'submissions-over-350') {
+      return c.json({ 
+        error: 'Auto-resolution only available for verifiable markets',
+        marketId: marketIdStr,
+        verifiableMarkets: ['submissions-over-400', 'submissions-over-350'],
+        note: 'Other markets require manual resolution after hackathon results.',
+      }, 400);
+    }
+    
+    // Fetch verification data
+    const threshold = marketIdStr === 'submissions-over-400' ? 400 : 350;
+    
+    let projectCount: number;
+    try {
+      const response = await fetch('https://agents.colosseum.com/api/projects');
+      const data = await response.json() as { projects: any[]; totalCount?: number };
+      projectCount = data.totalCount ?? data.projects?.length ?? 0;
+    } catch (fetchError) {
+      return c.json({ 
+        error: 'Failed to fetch verification data from Colosseum API',
+        verificationSource: 'https://agents.colosseum.com/api/projects',
+        message: 'Retry later or use manual resolution',
+      }, 503);
+    }
+    
+    // Determine outcome based on data
+    const meetsThreshold = projectCount > threshold;
+    const winningOutcome = meetsThreshold ? 0 : 1; // 0 = Yes, 1 = No
+    const winningOutcomeName = market.outcomes[winningOutcome];
+    
+    // Execute resolution
+    const tx = await program.methods
+      .resolveMarket(winningOutcome)
+      .accounts({
+        market: marketPubkey,
+        authority: authorityWallet.publicKey,
+      })
+      .signers([authorityWallet])
+      .rpc();
+    
+    console.log(`Auto-resolved ${marketIdStr}: ${winningOutcomeName} (project count: ${projectCount}, threshold: ${threshold})`);
+    
+    return c.json({
+      success: true,
+      marketId: marketIdStr,
+      resolution: {
+        winningOutcome,
+        winningOutcomeName,
+        reason: `Project count (${projectCount}) ${meetsThreshold ? '>' : '≤'} threshold (${threshold})`,
+      },
+      verification: {
+        projectCount,
+        threshold,
+        meetsThreshold,
+        source: 'https://agents.colosseum.com/api/projects',
+        timestamp: new Date().toISOString(),
+      },
+      txSignature: tx,
+      message: 'Market resolved automatically based on verifiable data. No human discretion involved.',
+    });
+  } catch (error) {
+    console.error('Error auto-resolving market:', error);
     return c.json({ error: String(error) }, 500);
   }
 });
