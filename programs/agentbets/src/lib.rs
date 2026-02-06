@@ -191,7 +191,7 @@ pub struct BuyShares<'info> {
         seeds = [b"vault", market.key().as_ref()],
         bump
     )]
-    pub vault: AccountInfo<'info>,
+    pub vault: UncheckedAccount<'info>,
     
     #[account(mut)]
     pub buyer: Signer<'info>,
@@ -226,7 +226,7 @@ pub struct ClaimWinnings<'info> {
         seeds = [b"vault", market.key().as_ref()],
         bump
     )]
-    pub vault: AccountInfo<'info>,
+    pub vault: UncheckedAccount<'info>,
     
     #[account(mut)]
     pub claimer: Signer<'info>,
