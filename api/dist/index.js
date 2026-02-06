@@ -4,6 +4,7 @@ import { cors } from 'hono/cors';
 import { Connection, PublicKey, Keypair, SystemProgram, LAMPORTS_PER_SOL } from '@solana/web3.js';
 import { Program, AnchorProvider, Wallet, setProvider } from '@coral-xyz/anchor';
 import BN from 'bn.js';
+import * as bs58 from 'bs58';
 import { readFileSync } from 'fs';
 import idl from './idl.json' with { type: 'json' };
 // === Configuration ===
@@ -11,15 +12,30 @@ const DEVNET_PROGRAM_ID = 'G59nkJ7khC1aKMr6eaRX1SssfeUuP7Ln8BpDj7ELkkcu';
 const RPC_URL = process.env.RPC_URL || 'https://api.devnet.solana.com';
 const PORT = parseInt(process.env.PORT || '3000', 10);
 const AUTHORITY_KEYPAIR_PATH = process.env.AUTHORITY_KEYPAIR || `${process.env.HOME}/.config/solana/agentbets.json`;
+const AUTHORITY_PRIVATE_KEY = process.env.AUTHORITY_PRIVATE_KEY; // Base58 or JSON array
 // === Initialize Solana Connection ===
 const connection = new Connection(RPC_URL, 'confirmed');
 const programId = new PublicKey(DEVNET_PROGRAM_ID);
 // Load authority wallet (for creating markets, resolving)
+// Priority: env var AUTHORITY_PRIVATE_KEY > file path
 let authorityWallet = null;
 try {
-    const keypairData = JSON.parse(readFileSync(AUTHORITY_KEYPAIR_PATH, 'utf-8'));
-    authorityWallet = Keypair.fromSecretKey(Uint8Array.from(keypairData));
-    console.log(`Authority wallet loaded: ${authorityWallet.publicKey.toBase58()}`);
+    if (AUTHORITY_PRIVATE_KEY) {
+        // Try base58 first, then JSON array
+        try {
+            authorityWallet = Keypair.fromSecretKey(bs58.default.decode(AUTHORITY_PRIVATE_KEY));
+        }
+        catch {
+            const keypairData = JSON.parse(AUTHORITY_PRIVATE_KEY);
+            authorityWallet = Keypair.fromSecretKey(Uint8Array.from(keypairData));
+        }
+        console.log(`Authority wallet loaded from env: ${authorityWallet.publicKey.toBase58()}`);
+    }
+    else {
+        const keypairData = JSON.parse(readFileSync(AUTHORITY_KEYPAIR_PATH, 'utf-8'));
+        authorityWallet = Keypair.fromSecretKey(Uint8Array.from(keypairData));
+        console.log(`Authority wallet loaded from file: ${authorityWallet.publicKey.toBase58()}`);
+    }
 }
 catch (e) {
     console.log('Warning: Authority keypair not found. Market creation/resolution disabled.');
