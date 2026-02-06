@@ -25,19 +25,28 @@ For each market below, I've documented:
 
 **Context:** This is a test market created to verify the betting and resolution flow works correctly. There is no external data source — the resolution demonstrates the system functioning.
 
-**Resolution Decision:** Will resolve to **Yes** because:
-1. The market was created to test the system
-2. One position exists (0.05 SOL on Yes)
-3. This tests the complete flow: create → bet → resolve → claim
+**🔥 AUTO-RESOLVABLE** — Anyone can trigger resolution after Feb 7, 06:38 UTC:
+```bash
+# Check status (shows countdown)
+curl https://agentbets-api-production.up.railway.app/markets/fresh-test-1770359891082/verify | jq '.autoResolve'
+
+# After time passes, anyone can resolve:
+curl -X POST https://agentbets-api-production.up.railway.app/markets/fresh-test-1770359891082/auto-resolve
+```
+
+**Resolution Decision:** Will resolve to **Yes** automatically because:
+1. Test markets always resolve to "Yes" (outcome 0)
+2. This is programmatic — no human discretion involved
+3. Anyone can trigger it once resolution time passes
 
 **Verification:** After resolution, verify:
 - Market shows `resolved: true`
 - `winningOutcome: 0` (Yes)
-- Winner can claim funds
+- Winner can claim funds via `/markets/{id}/claim`
 
-**Resolution Date:** Feb 7, 2026 (after 24h challenge window from announcement)
+**Resolution Time:** Feb 7, 2026, 06:38 UTC (11:38 PM MST Feb 6)
 
-**Challenge Window:** Opens Feb 6, 11:38 PM MST. Closes Feb 7, 11:38 PM MST.
+**Challenge Window:** 24h after resolution (until Feb 8, 06:38 UTC)
 
 ---
 

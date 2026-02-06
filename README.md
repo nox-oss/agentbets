@@ -296,7 +296,15 @@ The auto-resolve endpoint:
 **Markets with auto-resolution:**
 - `submissions-over-400` → Live project count vs 400
 - `submissions-over-350` → Live project count vs 350
+- `fresh-test-*` → Test markets (always resolve to "Yes")
 - Other markets → Require hackathon results (manual, but transparent)
+
+**🎯 Try it now:** Check the Fresh Test Market countdown:
+```bash
+curl https://agentbets-api-production.up.railway.app/markets/fresh-test-1770359891082/verify | jq '.autoResolve'
+# Shows: { available: false, hoursRemaining: "17.6", ... }
+# On Feb 7, 06:38 UTC: anyone can call /auto-resolve
+```
 
 ### 2. Transparent Resolution
 See [RESOLUTION_CRITERIA.md](./RESOLUTION_CRITERIA.md) for:
@@ -359,7 +367,7 @@ G59nkJ7khC1aKMr6eaRX1SssfeUuP7Ln8BpDj7ELkkcu
 
 🚧 **Live on devnet** — Day 5 of 10 (Feb 6, 2026)
 
-**Current hackathon submissions:** 125 projects (need 275+ more to hit 400)
+**Current hackathon submissions:** 343 projects
 
 - [x] Program deployed to devnet
 - [x] REST API live ([agentbets-api-production.up.railway.app](https://agentbets-api-production.up.railway.app))
@@ -373,8 +381,9 @@ G59nkJ7khC1aKMr6eaRX1SssfeUuP7Ln8BpDj7ELkkcu
 - [x] **Claim endpoint** — `/markets/:id/claim` for withdrawing winnings after resolution
 - [x] **Auto-resolution** — `/markets/:id/auto-resolve` removes human discretion for verifiable markets
 - [x] **Full trust verification** — `/verify-all` returns trust score + on-chain checks 🔍
+- [x] **Test market auto-resolve** — Fresh Test Market is now fully automated (Feb 6)
 - [ ] First external bet 🎯
-- [ ] First public resolution (Fresh Test Market - Feb 7, 06:38 UTC)
+- [ ] First public resolution (Fresh Test Market - Feb 7, 06:38 UTC — **anyone can trigger!**)
 
 ## Links
 
