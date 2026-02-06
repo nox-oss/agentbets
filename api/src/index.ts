@@ -89,8 +89,11 @@ app.get('/', (c) => {
     endpoints: {
       'GET /markets': 'List all markets',
       'GET /markets/:id': 'Get market details',
+      'GET /markets/:id/position/:owner': 'Get position for a user',
+      'GET /resolutions/pending': 'List upcoming resolutions + challenge windows',
       'POST /markets': 'Create a new market (authority only)',
-      'POST /markets/:id/bet': 'Place a bet (requires signed tx)',
+      'POST /markets/:id/bet': 'Place a bet (returns unsigned tx to sign)',
+      'POST /markets/:id/resolve': 'Resolve market (authority only)',
     },
   });
 });
@@ -317,6 +320,54 @@ app.get('/markets/:id/position/:owner', async (c) => {
     });
   } catch (error) {
     return c.json({ error: 'Position not found' }, 404);
+  }
+});
+
+// Get pending resolutions (upcoming + their challenge windows)
+app.get('/resolutions/pending', async (c) => {
+  try {
+    const markets = await program.account.market.all();
+    const now = Math.floor(Date.now() / 1000);
+    const CHALLENGE_WINDOW_HOURS = 24;
+    
+    const pending = markets
+      .filter((m: { account: MarketAccount }) => !m.account.resolved)
+      .map((m: { publicKey: PublicKey; account: MarketAccount }) => {
+        const resolutionTime = m.account.resolutionTime.toNumber();
+        const challengeDeadline = resolutionTime + (CHALLENGE_WINDOW_HOURS * 3600);
+        const hoursUntilResolution = (resolutionTime - now) / 3600;
+        const hoursUntilChallengeClosed = (challengeDeadline - now) / 3600;
+        
+        return {
+          marketId: m.account.marketId,
+          question: m.account.question,
+          outcomes: m.account.outcomes,
+          pubkey: m.publicKey.toBase58(),
+          resolutionTime: resolutionTime,
+          resolutionDate: new Date(resolutionTime * 1000).toISOString(),
+          challengeDeadline: challengeDeadline,
+          challengeDeadlineDate: new Date(challengeDeadline * 1000).toISOString(),
+          status: now < resolutionTime 
+            ? 'awaiting_resolution' 
+            : now < challengeDeadline 
+              ? 'in_challenge_window'
+              : 'ready_to_finalize',
+          hoursUntilResolution: Math.max(0, hoursUntilResolution).toFixed(1),
+          hoursUntilChallengeClosed: Math.max(0, hoursUntilChallengeClosed).toFixed(1),
+          totalPoolSol: (m.account.totalPool.toNumber() / LAMPORTS_PER_SOL).toFixed(4),
+        };
+      })
+      .sort((a: any, b: any) => a.resolutionTime - b.resolutionTime);
+    
+    return c.json({
+      challengeWindowHours: CHALLENGE_WINDOW_HOURS,
+      pendingResolutions: pending,
+      count: pending.length,
+      note: 'Resolution will be posted to forum before on-chain execution. Challenge during the window to dispute.',
+    });
+  } catch (error) {
+    console.error('Error fetching pending resolutions:', error);
+    return c.json({ error: 'Failed to fetch pending resolutions' }, 500);
   }
 });
 
