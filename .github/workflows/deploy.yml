@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - 'api/**'
+      - 'railway.json'
 
 jobs:
   deploy:
@@ -16,8 +17,6 @@ jobs:
         run: npm install -g @railway/cli
       
       - name: Deploy to Railway
-        run: |
-          cd api
-          railway up --service agentbets-api
+        run: railway up --service agentbets-api
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
