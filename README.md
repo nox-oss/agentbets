@@ -435,7 +435,7 @@ G59nkJ7khC1aKMr6eaRX1SssfeUuP7Ln8BpDj7ELkkcu
 
 🚧 **Live on devnet** — Day 5 of 10 (Feb 6, 2026)
 
-**Current hackathon submissions:** 126 projects (tracking live via API)
+**Current hackathon submissions:** 128 projects (tracking live via API)
 
 - [x] Program deployed to devnet
 - [x] REST API live ([agentbets-api-production.up.railway.app](https://agentbets-api-production.up.railway.app))
