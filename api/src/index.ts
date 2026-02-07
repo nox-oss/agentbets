@@ -1031,14 +1031,13 @@ app.post('/bet/agentwallet/prepare', async (c) => {
         action: 'transfer-solana',
         to: vaultAddress,
         amount: sol,
-        memo: betId,
-        note: 'Use AgentWallet transfer-solana with this exact memo',
+        note: 'Use AgentWallet transfer-solana to send SOL to this address',
       },
       
       // What we'll do
       whatHappensNext: [
-        `1. You send ${sol} SOL to ${vaultAddress} with memo "${betId}"`,
-        '2. We detect your transfer on-chain (checking every 30s)',
+        `1. You send ${sol} SOL to ${vaultAddress}`,
+        '2. We detect your transfer on-chain by matching sender + amount (checking every 60s)',
         '3. We place the bet using our vault (your address tracked for payout)',
         '4. If you win, we transfer winnings to your AgentWallet address',
       ],
@@ -1081,9 +1080,9 @@ app.post('/bet/agentwallet/prepare', async (c) => {
         params: {
           to: vaultAddress,
           amount: sol,
-          memo: betId,
         },
-        example: `Use AgentWallet's transfer-solana action with: to="${vaultAddress}", amount=${sol}, memo="${betId}"`,
+        example: `Use AgentWallet's transfer-solana action with: to="${vaultAddress}", amount=${sol}`,
+        note: 'No memo needed - we match by sender address + amount',
       },
     });
     
@@ -1158,9 +1157,14 @@ app.post('/bet/agentwallet/process', async (c) => {
       continue;
     }
     
-    // Check for incoming transfer with matching memo
+    // Check for incoming transfer matching sender + amount (no memo required)
+    // AgentWallet doesn't support memos, so we match by:
+    // 1. Sender = agent's pubkey
+    // 2. Amount within 5% tolerance (fees vary)
+    // 3. Time within window (handled above)
     try {
       const vaultPubkey = authorityWallet.publicKey;
+      const agentPubkey = new PublicKey(deposit.agentPubkey);
       const signatures = await connection.getSignaturesForAddress(vaultPubkey, { limit: 50 });
       
       for (const sigInfo of signatures) {
@@ -1173,74 +1177,84 @@ app.post('/bet/agentwallet/process', async (c) => {
         const tx = await connection.getParsedTransaction(sigInfo.signature, { maxSupportedTransactionVersion: 0 });
         if (!tx?.meta || tx.meta.err) continue;
         
-        // Check for memo matching bet ID
-        const memoInstruction = tx.transaction.message.instructions.find(
-          (ix: any) => ix.program === 'spl-memo' || (ix as any).programId?.toBase58?.() === 'MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr'
-        );
+        // Find the transfer instruction (system program transfer)
+        const instructions = tx.transaction.message.instructions;
+        let foundMatch = false;
         
-        if (memoInstruction) {
-          const memoData = (memoInstruction as any).parsed || '';
-          if (memoData === deposit.betId || (typeof memoData === 'string' && memoData.includes(deposit.betId))) {
-            // Found matching transfer!
-            deposit.status = 'detected';
-            deposit.txSignature = sigInfo.signature;
+        for (const ix of instructions) {
+          // Check for system program transfer
+          if ('parsed' in ix && ix.parsed?.type === 'transfer') {
+            const info = ix.parsed.info;
+            const sender = info.source;
+            const recipient = info.destination;
+            const lamports = info.lamports;
             
-            // Verify amount from pre/post balances
-            const preBalance = tx.meta.preBalances[0] || 0;
-            const postBalance = tx.meta.postBalances[0] || 0;
-            // Note: This checks vault balance change, should check sender amount
-            
-            // Place the bet on their behalf
-            try {
-              const agent = new PublicKey(deposit.agentPubkey);
-              
-              // Derive market PDA
-              const [marketPda] = PublicKey.findProgramAddressSync(
-                [Buffer.from('market'), Buffer.from(deposit.marketId)],
-                programId
-              );
-              
-              // Use authority wallet as buyer (we control it)
-              // Agent is tracked as beneficiary off-chain - winnings transferred on claim
-              const [positionPda] = PublicKey.findProgramAddressSync(
-                [Buffer.from('position'), marketPda.toBuffer(), authorityWallet!.publicKey.toBuffer()],
-                programId
-              );
-              
-              // Place bet with authority wallet (we pay, we sign)
-              // Agent's address is stored in deposit.agentPubkey for payout
-              const betTx = await program.methods
-                .buyShares(deposit.outcomeIndex, new BN(deposit.expectedAmountLamports))
-                .accounts({
-                  market: marketPda,
-                  position: positionPda,
-                  buyer: authorityWallet!.publicKey, // Authority places bet
-                  systemProgram: SystemProgram.programId,
-                })
-                .signers([authorityWallet!])
-                .rpc();
-              
-              deposit.status = 'placed';
-              deposit.betTxSignature = betTx;
-              
-              // Trigger webhook
-              triggerWebhooks('bet', {
-                marketId: deposit.marketId,
-                betId: deposit.betId,
-                viaIntegration: 'agentwallet',
-                agentPubkey: deposit.agentPubkey,
-                txSignature: betTx,
-              }).catch(e => console.error('AgentWallet bet webhook failed:', e));
-              
-              processed.push({ betId: deposit.betId, status: 'placed', result: betTx });
-            } catch (betError) {
-              deposit.status = 'failed';
-              deposit.error = String(betError);
-              processed.push({ betId: deposit.betId, status: 'failed', result: deposit.error });
+            // Check: sender is agent, recipient is vault, amount matches (5% tolerance)
+            if (sender === agentPubkey.toBase58() && 
+                recipient === vaultPubkey.toBase58()) {
+              const tolerance = deposit.expectedAmountLamports * 0.05;
+              if (Math.abs(lamports - deposit.expectedAmountLamports) <= tolerance) {
+                foundMatch = true;
+                break;
+              }
             }
-            
-            break; // Found the matching transfer, stop searching
           }
+        }
+        
+        if (foundMatch) {
+          // Found matching transfer!
+          deposit.status = 'detected';
+          deposit.txSignature = sigInfo.signature;
+          console.log(`Detected AgentWallet deposit ${deposit.betId} from ${deposit.agentPubkey}: ${sigInfo.signature}`);
+          
+          // Place the bet on their behalf
+          try {
+            // Derive market PDA
+            const [marketPda] = PublicKey.findProgramAddressSync(
+              [Buffer.from('market'), Buffer.from(deposit.marketId)],
+              programId
+            );
+            
+            // Use authority wallet as buyer (we control it)
+            // Agent is tracked as beneficiary off-chain - winnings transferred on claim
+            const [positionPda] = PublicKey.findProgramAddressSync(
+              [Buffer.from('position'), marketPda.toBuffer(), authorityWallet!.publicKey.toBuffer()],
+              programId
+            );
+            
+            // Place bet with authority wallet (we pay, we sign)
+            // Agent's address is stored in deposit.agentPubkey for payout
+            const betTx = await program.methods
+              .buyShares(deposit.outcomeIndex, new BN(deposit.expectedAmountLamports))
+              .accounts({
+                market: marketPda,
+                position: positionPda,
+                buyer: authorityWallet!.publicKey, // Authority places bet
+                systemProgram: SystemProgram.programId,
+              })
+              .signers([authorityWallet!])
+              .rpc();
+            
+            deposit.status = 'placed';
+            deposit.betTxSignature = betTx;
+            
+            // Trigger webhook
+            triggerWebhooks('bet', {
+              marketId: deposit.marketId,
+              betId: deposit.betId,
+              viaIntegration: 'agentwallet',
+              agentPubkey: deposit.agentPubkey,
+              txSignature: betTx,
+            }).catch(e => console.error('AgentWallet bet webhook failed:', e));
+            
+            processed.push({ betId: deposit.betId, status: 'placed', result: betTx });
+          } catch (betError) {
+            deposit.status = 'failed';
+            deposit.error = String(betError);
+            processed.push({ betId: deposit.betId, status: 'failed', result: deposit.error });
+          }
+          
+          break; // Found the matching transfer, stop searching
         }
       }
     } catch (searchError) {
