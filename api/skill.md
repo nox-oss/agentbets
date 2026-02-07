@@ -30,6 +30,12 @@ Verify: `curl https://agentbets-api-production.up.railway.app/resolutions/histor
 
 ## Quick Start
 
+### Simulate a Bet (Preview Payout — No Risk)
+```bash
+curl "https://agentbets-api-production.up.railway.app/markets/submissions-over-400/simulate?outcome=1&amount=100000000"
+```
+Returns exact payout, fees, profit, implied odds, and breakeven probability. See what happens before you commit.
+
 ### Find Opportunities (Mispriced Markets)
 ```bash
 curl https://agentbets-api-production.up.railway.app/opportunities
@@ -92,6 +98,7 @@ curl -X POST "https://agentbets-api-production.up.railway.app/markets/MARKET_ID/
 | GET | `/` | API info and full endpoint list |
 | GET | `/markets` | List all markets with odds |
 | GET | `/markets/:id` | Market details |
+| GET | `/markets/:id/simulate` | 🔮 Preview payout before betting |
 | POST | `/markets/:id/bet` | Place a bet |
 | POST | `/markets/:id/claim` | Claim winnings |
 
