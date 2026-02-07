@@ -151,6 +151,7 @@ app.get('/', (c) => {
             'GET /security': '🔒 Security model docs (what authority can/cannot do)',
             'GET /skill.md': '📖 Skill file for agent discovery (markdown)',
             'POST /markets': 'Create a new parimutuel market (authority only)',
+            'GET /markets/:id/simulate': '🔮 Preview bet payout before committing (no risk, just info)',
             'POST /markets/:id/bet': 'Place a bet (returns unsigned tx to sign)',
             'POST /markets/:id/claim': 'Claim winnings after resolution (returns unsigned tx)',
             'POST /markets/:id/dispute': '⚖️ File a dispute against a resolution (24h challenge window)',
@@ -344,6 +345,123 @@ app.get('/markets/:id/position/:owner', async (c) => {
     }
     catch (error) {
         return c.json({ error: 'Position not found' }, 404);
+    }
+});
+// Simulate a bet - preview payout before committing
+// Shows exact ROI, breakeven probability, and what happens in each outcome
+app.get('/markets/:id/simulate', async (c) => {
+    const marketId = c.req.param('id');
+    const outcomeIndex = parseInt(c.req.query('outcome') || '0');
+    const amountLamports = parseInt(c.req.query('amount') || '50000000'); // Default 0.05 SOL
+    try {
+        // Get market
+        let marketPubkey;
+        try {
+            marketPubkey = new PublicKey(marketId);
+        }
+        catch {
+            const [pda] = PublicKey.findProgramAddressSync([Buffer.from('market'), Buffer.from(marketId)], programId);
+            marketPubkey = pda;
+        }
+        const market = await program.account.market.fetch(marketPubkey);
+        if (market.resolved) {
+            return c.json({
+                error: 'Market already resolved',
+                winningOutcome: market.winningOutcome,
+                winningOutcomeName: market.outcomes[market.winningOutcome],
+            }, 400);
+        }
+        if (outcomeIndex < 0 || outcomeIndex >= market.outcomes.length) {
+            return c.json({
+                error: `Invalid outcome index. Valid range: 0-${market.outcomes.length - 1}`,
+                outcomes: market.outcomes,
+            }, 400);
+        }
+        const totalPool = market.totalPool.toNumber();
+        const outcomePools = market.outcomePools.map((p) => p.toNumber());
+        const currentOutcomePool = outcomePools[outcomeIndex];
+        // Simulate adding this bet
+        const newOutcomePool = currentOutcomePool + amountLamports;
+        const newTotalPool = totalPool + amountLamports;
+        // Calculate shares you'd get (proportional to your contribution)
+        const yourShares = amountLamports;
+        // If you win: (yourShares / totalWinningShares) * totalPool - 2% fee
+        const grossPayout = Math.floor((yourShares * newTotalPool) / newOutcomePool);
+        const fee = Math.floor(grossPayout / 50); // 2%
+        const netPayout = grossPayout - fee;
+        const profit = netPayout - amountLamports;
+        // Calculate implied probability
+        const impliedProb = newOutcomePool / newTotalPool;
+        const multiplier = netPayout / amountLamports;
+        const roi = ((netPayout - amountLamports) / amountLamports) * 100;
+        // Breakeven probability (what probability makes this bet EV-neutral)
+        const breakevenProb = amountLamports / netPayout;
+        return c.json({
+            simulation: {
+                marketId: market.marketId,
+                question: market.question,
+                betOutcome: market.outcomes[outcomeIndex],
+                outcomeIndex,
+                betAmount: {
+                    lamports: amountLamports,
+                    sol: amountLamports / LAMPORTS_PER_SOL,
+                },
+            },
+            ifYouWin: {
+                grossPayout: {
+                    lamports: grossPayout,
+                    sol: grossPayout / LAMPORTS_PER_SOL,
+                },
+                fee: {
+                    lamports: fee,
+                    sol: fee / LAMPORTS_PER_SOL,
+                    percent: '2%',
+                },
+                netPayout: {
+                    lamports: netPayout,
+                    sol: netPayout / LAMPORTS_PER_SOL,
+                },
+                profit: {
+                    lamports: profit,
+                    sol: profit / LAMPORTS_PER_SOL,
+                },
+                multiplier: `${multiplier.toFixed(2)}x`,
+                roi: `+${roi.toFixed(1)}%`,
+            },
+            ifYouLose: {
+                loss: {
+                    lamports: amountLamports,
+                    sol: amountLamports / LAMPORTS_PER_SOL,
+                },
+                note: 'You lose your entire bet. No partial refunds.',
+            },
+            odds: {
+                impliedProbability: `${(impliedProb * 100).toFixed(1)}%`,
+                breakevenProbability: `${(breakevenProb * 100).toFixed(1)}%`,
+                note: `You profit if true probability > ${(breakevenProb * 100).toFixed(1)}%`,
+            },
+            currentMarket: {
+                totalPool: `${(totalPool / LAMPORTS_PER_SOL).toFixed(4)} SOL`,
+                outcomePool: `${(currentOutcomePool / LAMPORTS_PER_SOL).toFixed(4)} SOL`,
+                outcomes: market.outcomes.map((name, i) => ({
+                    name,
+                    pool: `${(outcomePools[i] / LAMPORTS_PER_SOL).toFixed(4)} SOL`,
+                    impliedOdds: totalPool > 0 ? `${((outcomePools[i] / totalPool) * 100).toFixed(1)}%` : '0%',
+                })),
+            },
+            readyToBet: {
+                endpoint: `POST /markets/${market.marketId}/bet`,
+                body: {
+                    outcomeIndex,
+                    amount: amountLamports,
+                    buyerPubkey: 'YOUR_WALLET_PUBKEY',
+                },
+            },
+        });
+    }
+    catch (error) {
+        console.error('Error simulating bet:', error);
+        return c.json({ error: 'Market not found' }, 404);
     }
 });
 // Get pending resolutions (upcoming + their challenge windows)
