@@ -65,6 +65,48 @@ curl -X POST "https://agentbets-api-production.up.railway.app/markets/submission
 | `/resolutions/history` | Past resolutions with on-chain proofs |
 | `/resolutions/pending` | Markets awaiting resolution |
 
+## 🔔 Webhooks (NEW)
+
+Get notified when things happen. No polling required.
+
+### Register a Webhook
+
+```bash
+curl -X POST "https://agentbets-api-production.up.railway.app/webhooks" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "url": "https://your-server.com/webhook",
+    "events": ["resolution", "bet", "market_created"],
+    "secret": "optional-hmac-secret"
+  }'
+```
+
+Returns webhook ID for management.
+
+### Webhook Events
+
+| Event | Fired When |
+|-------|------------|
+| `resolution` | Market resolved + winner paid |
+| `bet` | New bet placed on a market |
+| `market_created` | New market created |
+| `dispute` | Dispute filed on a market |
+
+### Webhook Endpoints
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/webhooks` | POST | Register a webhook |
+| `/webhooks/:id` | GET | Check webhook status |
+| `/webhooks/:id` | DELETE | Unregister webhook |
+| `/webhooks/:id/test` | POST | Test webhook delivery |
+
+### Security
+
+- Optional HMAC-SHA256 signature via `X-AgentBets-Signature` header
+- Auto-disabled after 5 consecutive failures
+- 5-second timeout per request
+
 ## Track Record
 
 **Trust Score: 100% (A Grade)**

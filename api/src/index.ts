@@ -25,6 +25,103 @@ interface Dispute {
 }
 
 const DISPUTES_FILE = process.env.DISPUTES_FILE || './disputes.json';
+const WEBHOOKS_FILE = process.env.WEBHOOKS_FILE || './webhooks.json';
+
+// === Webhook System ===
+type WebhookEvent = 'resolution' | 'bet' | 'market_created' | 'dispute';
+
+interface Webhook {
+  id: string;
+  url: string;
+  events: WebhookEvent[];
+  marketIds?: string[]; // null = all markets
+  secret?: string; // optional HMAC secret for verification
+  createdAt: string;
+  lastTriggered?: string;
+  failCount: number;
+  active: boolean;
+}
+
+function loadWebhooks(): Webhook[] {
+  try {
+    if (existsSync(WEBHOOKS_FILE)) {
+      return JSON.parse(readFileSync(WEBHOOKS_FILE, 'utf-8'));
+    }
+  } catch (e) {
+    console.error('Failed to load webhooks:', e);
+  }
+  return [];
+}
+
+function saveWebhooks(webhooks: Webhook[]) {
+  try {
+    writeFileSync(WEBHOOKS_FILE, JSON.stringify(webhooks, null, 2));
+  } catch (e) {
+    console.error('Failed to save webhooks:', e);
+  }
+}
+
+async function triggerWebhooks(event: WebhookEvent, payload: Record<string, unknown>) {
+  const webhooks = loadWebhooks();
+  const marketId = payload.marketId as string | undefined;
+  
+  const matching = webhooks.filter(w => 
+    w.active && 
+    w.events.includes(event) &&
+    (!w.marketIds || !marketId || w.marketIds.includes(marketId))
+  );
+  
+  for (const webhook of matching) {
+    try {
+      const body = JSON.stringify({
+        event,
+        timestamp: new Date().toISOString(),
+        payload,
+      });
+      
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        'User-Agent': 'AgentBets-Webhook/1.0',
+      };
+      
+      // Add HMAC signature if secret is configured
+      if (webhook.secret) {
+        const crypto = await import('crypto');
+        const signature = crypto.createHmac('sha256', webhook.secret)
+          .update(body)
+          .digest('hex');
+        headers['X-AgentBets-Signature'] = `sha256=${signature}`;
+      }
+      
+      const res = await fetch(webhook.url, {
+        method: 'POST',
+        headers,
+        body,
+        signal: AbortSignal.timeout(5000), // 5s timeout
+      });
+      
+      if (res.ok) {
+        webhook.lastTriggered = new Date().toISOString();
+        webhook.failCount = 0;
+      } else {
+        webhook.failCount++;
+        console.error(`Webhook ${webhook.id} failed: ${res.status}`);
+      }
+    } catch (e) {
+      webhook.failCount++;
+      console.error(`Webhook ${webhook.id} error:`, e);
+    }
+    
+    // Disable after 5 consecutive failures
+    if (webhook.failCount >= 5) {
+      webhook.active = false;
+      console.log(`Webhook ${webhook.id} disabled after 5 failures`);
+    }
+  }
+  
+  // Save updated webhook states
+  saveWebhooks(webhooks);
+}
 
 function loadDisputes(): Record<string, Dispute[]> {
   try {
@@ -308,6 +405,18 @@ app.post('/markets', async (c) => {
     
     console.log(`Market created: ${marketId} (tx: ${tx})`);
     
+    // Trigger webhook asynchronously
+    triggerWebhooks('market_created', {
+      marketId,
+      marketPubkey: marketPda.toBase58(),
+      question,
+      outcomes,
+      resolutionTime,
+      resolutionDate: new Date(resolutionTime * 1000).toISOString(),
+      txSignature: tx,
+      explorerUrl: `https://explorer.solana.com/tx/${tx}?cluster=devnet`,
+    }).catch(e => console.error('Market creation webhook trigger failed:', e));
+    
     return c.json({
       success: true,
       marketId,
@@ -347,6 +456,22 @@ app.post('/markets/:id/bet', async (c) => {
       const txBuffer = Buffer.from(signedTx, 'base64');
       const sig = await connection.sendRawTransaction(txBuffer);
       await connection.confirmTransaction(sig, 'confirmed');
+      
+      // Try to get market data for webhook
+      let marketData: MarketAccount | null = null;
+      try {
+        marketData = await program.account.market.fetch(marketPubkey) as MarketAccount;
+      } catch (e) {
+        console.error('Failed to fetch market for bet webhook:', e);
+      }
+      
+      // Trigger webhook asynchronously
+      triggerWebhooks('bet', {
+        marketId: marketData?.marketId || marketId,
+        marketPubkey: marketPubkey.toBase58(),
+        txSignature: sig,
+        explorerUrl: `https://explorer.solana.com/tx/${sig}?cluster=devnet`,
+      }).catch(e => console.error('Bet webhook trigger failed:', e));
       
       return c.json({
         success: true,
@@ -1278,6 +1403,25 @@ app.post('/markets/:id/resolve', async (c) => {
       .signers([authorityWallet])
       .rpc();
     
+    // Fetch updated market data for webhook
+    let marketData: MarketAccount | null = null;
+    try {
+      marketData = await program.account.market.fetch(marketPubkey) as MarketAccount;
+    } catch (e) {
+      console.error('Failed to fetch market for webhook:', e);
+    }
+    
+    // Trigger webhooks asynchronously (don't block response)
+    triggerWebhooks('resolution', {
+      marketId: marketData?.marketId || marketId,
+      marketPubkey: marketPubkey.toBase58(),
+      winningOutcome,
+      winnerName: marketData?.outcomes?.[winningOutcome] || `Outcome ${winningOutcome}`,
+      txSignature: tx,
+      totalPool: marketData ? (marketData.totalPool.toNumber() / LAMPORTS_PER_SOL).toFixed(4) : null,
+      explorerUrl: `https://explorer.solana.com/tx/${tx}?cluster=devnet`,
+    }).catch(e => console.error('Webhook trigger failed:', e));
+    
     return c.json({
       success: true,
       txSignature: tx,
@@ -1824,6 +1968,172 @@ app.get('/faucet/status', async (c) => {
     walletBalance: walletBalance / LAMPORTS_PER_SOL,
     remaining: Math.max(0, (FAUCET_MAX_TOTAL - totalClaimed)) / LAMPORTS_PER_SOL,
   });
+});
+
+// ===========================================
+// Webhook Registration Endpoints
+// ===========================================
+
+// POST /webhooks - Register a new webhook
+app.post('/webhooks', async (c) => {
+  try {
+    const body = await c.req.json();
+    const { url, events, marketIds, secret } = body;
+    
+    if (!url || typeof url !== 'string') {
+      return c.json({ error: 'Missing or invalid url' }, 400);
+    }
+    
+    // Validate URL
+    try {
+      new URL(url);
+    } catch {
+      return c.json({ error: 'Invalid URL format' }, 400);
+    }
+    
+    const validEvents: WebhookEvent[] = ['resolution', 'bet', 'market_created', 'dispute'];
+    const requestedEvents = events || ['resolution']; // Default to resolution only
+    
+    if (!Array.isArray(requestedEvents) || requestedEvents.some(e => !validEvents.includes(e))) {
+      return c.json({ 
+        error: 'Invalid events. Valid: ' + validEvents.join(', '),
+        validEvents,
+      }, 400);
+    }
+    
+    // Generate webhook ID
+    const id = `wh_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+    
+    const webhook: Webhook = {
+      id,
+      url,
+      events: requestedEvents,
+      marketIds: marketIds || null,
+      secret: secret || undefined,
+      createdAt: new Date().toISOString(),
+      failCount: 0,
+      active: true,
+    };
+    
+    const webhooks = loadWebhooks();
+    webhooks.push(webhook);
+    saveWebhooks(webhooks);
+    
+    return c.json({
+      success: true,
+      webhook: {
+        id: webhook.id,
+        url: webhook.url,
+        events: webhook.events,
+        marketIds: webhook.marketIds,
+        hasSecret: !!webhook.secret,
+        createdAt: webhook.createdAt,
+        active: webhook.active,
+      },
+      usage: {
+        getStatus: `GET /webhooks/${id}`,
+        delete: `DELETE /webhooks/${id}`,
+      },
+    });
+  } catch (error) {
+    console.error('Webhook registration error:', error);
+    return c.json({ error: 'Failed to register webhook: ' + String(error) }, 500);
+  }
+});
+
+// GET /webhooks/:id - Check webhook status
+app.get('/webhooks/:id', async (c) => {
+  const id = c.req.param('id');
+  const webhooks = loadWebhooks();
+  const webhook = webhooks.find(w => w.id === id);
+  
+  if (!webhook) {
+    return c.json({ error: 'Webhook not found' }, 404);
+  }
+  
+  return c.json({
+    id: webhook.id,
+    url: webhook.url,
+    events: webhook.events,
+    marketIds: webhook.marketIds,
+    hasSecret: !!webhook.secret,
+    createdAt: webhook.createdAt,
+    lastTriggered: webhook.lastTriggered || null,
+    failCount: webhook.failCount,
+    active: webhook.active,
+  });
+});
+
+// DELETE /webhooks/:id - Unregister a webhook
+app.delete('/webhooks/:id', async (c) => {
+  const id = c.req.param('id');
+  const webhooks = loadWebhooks();
+  const index = webhooks.findIndex(w => w.id === id);
+  
+  if (index === -1) {
+    return c.json({ error: 'Webhook not found' }, 404);
+  }
+  
+  webhooks.splice(index, 1);
+  saveWebhooks(webhooks);
+  
+  return c.json({
+    success: true,
+    message: 'Webhook unregistered',
+  });
+});
+
+// POST /webhooks/:id/test - Test a webhook
+app.post('/webhooks/:id/test', async (c) => {
+  const id = c.req.param('id');
+  const webhooks = loadWebhooks();
+  const webhook = webhooks.find(w => w.id === id);
+  
+  if (!webhook) {
+    return c.json({ error: 'Webhook not found' }, 404);
+  }
+  
+  try {
+    const body = JSON.stringify({
+      event: 'test',
+      timestamp: new Date().toISOString(),
+      payload: {
+        message: 'This is a test webhook from AgentBets',
+        webhookId: webhook.id,
+      },
+    });
+    
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      'User-Agent': 'AgentBets-Webhook/1.0',
+    };
+    
+    if (webhook.secret) {
+      const crypto = await import('crypto');
+      const signature = crypto.createHmac('sha256', webhook.secret)
+        .update(body)
+        .digest('hex');
+      headers['X-AgentBets-Signature'] = `sha256=${signature}`;
+    }
+    
+    const res = await fetch(webhook.url, {
+      method: 'POST',
+      headers,
+      body,
+      signal: AbortSignal.timeout(5000),
+    });
+    
+    return c.json({
+      success: res.ok,
+      status: res.status,
+      statusText: res.statusText,
+    });
+  } catch (error) {
+    return c.json({
+      success: false,
+      error: String(error),
+    });
+  }
 });
 
 // ===========================================
