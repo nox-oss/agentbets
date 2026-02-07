@@ -230,6 +230,13 @@ app.get('/', (c) => {
             'POST /markets/:id/dispute': '⚖️ File a dispute against a resolution (24h challenge window)',
             'POST /markets/:id/auto-resolve': 'Auto-resolve verifiable markets (anyone can trigger)',
             'POST /markets/:id/resolve': 'Resolve market manually (authority only)',
+            // Wallet Authority Integrations — Enable autonomous agent betting
+            'POST /markets/:id/bet/paladin': '🤖 Bet via Paladin wallet delegation (bounded authority)',
+            // Webhooks — Real-time notifications
+            'POST /webhooks': '🔔 Register a webhook for market events',
+            'GET /webhooks/:id': '🔔 Check webhook status',
+            'DELETE /webhooks/:id': '🔔 Unregister a webhook',
+            'POST /webhooks/:id/test': '🔔 Test webhook delivery',
             // CLOB Markets (Order Book) — ⚠️ Trading DISABLED pending bug fixes
             'GET /clob/markets': '📊 List all CLOB markets (read-only)',
             'GET /clob/markets/:id': '📊 Get CLOB market with order book (read-only)',
@@ -414,6 +421,147 @@ app.post('/markets/:id/bet', async (c) => {
     }
     catch (error) {
         console.error('Error placing bet:', error);
+        return c.json({ error: String(error) }, 500);
+    }
+});
+// === Paladin Wallet Integration ===
+// Paladin Program: 4nsD1dKtbA9CpxD5vyN2eVQX7LhvxEWdxPyQJ5r83Kf5
+// Enables agents with bounded spending authority to bet autonomously
+const PALADIN_PROGRAM_ID = '4nsD1dKtbA9CpxD5vyN2eVQX7LhvxEWdxPyQJ5r83Kf5';
+app.post('/markets/:id/bet/paladin', async (c) => {
+    const marketId = c.req.param('id');
+    try {
+        const body = await c.req.json();
+        const { outcomeIndex, amount, agentPubkey, // The agent placing the bet
+        delegationPubkey, // The Paladin delegation PDA
+        signedTx, // Optional: pre-signed tx with delegation
+         } = body;
+        // Validate required fields
+        if (outcomeIndex === undefined || !amount || !agentPubkey) {
+            return c.json({
+                error: 'Missing required fields',
+                required: ['outcomeIndex', 'amount', 'agentPubkey'],
+                optional: ['delegationPubkey', 'signedTx'],
+                integration: {
+                    name: 'Paladin Wallet Integration',
+                    programId: PALADIN_PROGRAM_ID,
+                    description: 'Place bets using Paladin wallet delegation for autonomous agents',
+                    howItWorks: [
+                        '1. Human funds Paladin wallet with betting budget (e.g., 0.5 SOL)',
+                        '2. Human creates delegation with DailyLimit plugin (e.g., 0.1 SOL/day)',
+                        '3. Agent uses this endpoint with delegation proof',
+                        '4. AgentBets verifies delegation is valid and has remaining budget',
+                        '5. Bet executes without human approval (within limits)',
+                    ],
+                    paladinDocs: 'https://github.com/paladin-agent/paladin',
+                    status: 'Phase 1: Spec ready, integration testing pending',
+                },
+            }, 400);
+        }
+        // Get market pubkey
+        let marketPubkey;
+        try {
+            marketPubkey = new PublicKey(marketId);
+        }
+        catch {
+            const [pda] = PublicKey.findProgramAddressSync([Buffer.from('market'), Buffer.from(marketId)], programId);
+            marketPubkey = pda;
+        }
+        // Phase 1: Return spec and what we need to test
+        // Phase 2: Once we test with paladin-agent on devnet, add actual verification
+        if (!delegationPubkey) {
+            return c.json({
+                status: 'delegation_required',
+                message: 'To use Paladin integration, provide your delegation PDA',
+                marketPubkey: marketPubkey.toBase58(),
+                request: {
+                    outcomeIndex,
+                    amount,
+                    agentPubkey,
+                },
+                nextSteps: [
+                    '1. Create a Paladin wallet with betting budget on devnet',
+                    '2. Set up DailyLimit plugin with your desired spend limit',
+                    '3. Get your delegation PDA address',
+                    '4. Retry with delegationPubkey in your request',
+                ],
+                paladinEndpoints: {
+                    createWallet: 'paladin-agent API (see their skill.md)',
+                    getDelegation: 'Query Paladin program for delegation PDAs',
+                },
+            });
+        }
+        // If signed tx provided (agent signed with delegation authority)
+        if (signedTx) {
+            try {
+                const txBuffer = Buffer.from(signedTx, 'base64');
+                const sig = await connection.sendRawTransaction(txBuffer);
+                await connection.confirmTransaction(sig, 'confirmed');
+                // Trigger webhook
+                triggerWebhooks('bet', {
+                    marketId,
+                    marketPubkey: marketPubkey.toBase58(),
+                    txSignature: sig,
+                    viaIntegration: 'paladin',
+                    agentPubkey,
+                    delegationPubkey,
+                    explorerUrl: `https://explorer.solana.com/tx/${sig}?cluster=devnet`,
+                }).catch(e => console.error('Paladin bet webhook failed:', e));
+                return c.json({
+                    success: true,
+                    txSignature: sig,
+                    integration: 'paladin',
+                    message: 'Bet placed via Paladin delegation',
+                    explorerUrl: `https://explorer.solana.com/tx/${sig}?cluster=devnet`,
+                });
+            }
+            catch (error) {
+                return c.json({
+                    error: 'Transaction failed',
+                    details: String(error),
+                    hint: 'Check that delegation is valid and has remaining budget',
+                }, 400);
+            }
+        }
+        // Return unsigned tx for agent to sign with delegation
+        const agent = new PublicKey(agentPubkey);
+        // Derive position PDA
+        const [positionPda] = PublicKey.findProgramAddressSync([Buffer.from('position'), marketPubkey.toBuffer(), agent.toBuffer()], programId);
+        // Build instruction
+        const ix = await program.methods
+            .buyShares(outcomeIndex, new BN(amount))
+            .accounts({
+            market: marketPubkey,
+            position: positionPda,
+            buyer: agent,
+            systemProgram: SystemProgram.programId,
+        })
+            .instruction();
+        // Build transaction
+        const { blockhash } = await connection.getLatestBlockhash();
+        const tx = new (await import('@solana/web3.js')).Transaction({
+            recentBlockhash: blockhash,
+            feePayer: agent,
+        }).add(ix);
+        const serialized = tx.serialize({
+            requireAllSignatures: false,
+            verifySignatures: false,
+        }).toString('base64');
+        return c.json({
+            status: 'ready_to_sign',
+            unsignedTx: serialized,
+            marketPubkey: marketPubkey.toBase58(),
+            positionPda: positionPda.toBase58(),
+            integration: 'paladin',
+            delegation: {
+                pubkey: delegationPubkey,
+                note: 'Sign this tx using your Paladin delegation authority',
+            },
+            nextStep: 'Sign with delegation and submit via signedTx field',
+        });
+    }
+    catch (error) {
+        console.error('Error in Paladin bet:', error);
         return c.json({ error: String(error) }, 500);
     }
 });
