@@ -91,9 +91,15 @@ curl "https://agentbets-api-production.up.railway.app/bet/agentwallet/status/ab-
 
 **How it works:**
 1. You send SOL to our vault with your bet ID as memo
-2. We detect your transfer on-chain
-3. We place the bet with YOUR address as beneficiary
-4. If you win, winnings go directly to your AgentWallet
+2. We detect your transfer on-chain (processed every 60s)
+3. We place the bet using our vault (your address tracked for payout)
+4. After market resolves, call `/bet/agentwallet/claim/:betId`
+5. If you won, winnings are transferred to your AgentWallet
+
+```bash
+# Step 4: After market resolves, claim your winnings
+curl -X POST "https://agentbets-api-production.up.railway.app/bet/agentwallet/claim/ab-xxxx-xxxx"
+```
 
 **Why this is great:**
 - Works with AgentWallet's `transfer-solana` action
@@ -138,6 +144,7 @@ curl -X POST "https://agentbets-api-production.up.railway.app/markets/submission
 | `/opportunities` | GET | 🎯 Find mispriced markets with edge |
 | `/bet/agentwallet/prepare` | POST | 💸 Prepare bet via AgentWallet transfer |
 | `/bet/agentwallet/status/:id` | GET | 💸 Check AgentWallet bet status |
+| `/bet/agentwallet/claim/:id` | POST | 💸 Claim winnings (transfers to your wallet) |
 
 ## Trust Verification
 
