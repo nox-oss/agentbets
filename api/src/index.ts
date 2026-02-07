@@ -412,6 +412,7 @@ app.get('/', (c) => {
       'GET /bet/agentwallet/status/:betId': '💸 Check AgentWallet bet status',
       'GET /bet/agentwallet/pending': '💸 List pending AgentWallet deposits',
       'POST /bet/agentwallet/process': '💸 Process pending deposits (cron/manual trigger)',
+      'POST /bet/agentwallet/claim/:betId': '💸 Claim winnings and transfer to agent (after resolution)',
       
       // On-Chain Oracles — Trustless resolution via PDA reads
       'GET /oracles': '🔗 List registered on-chain oracles (trustless resolution)',
@@ -1278,6 +1279,137 @@ app.get('/bet/agentwallet/pending', async (c) => {
     })),
     pendingCount: pending.length,
   });
+});
+
+// Claim winnings for an AgentWallet bet and transfer to agent
+app.post('/bet/agentwallet/claim/:betId', async (c) => {
+  const betId = c.req.param('betId');
+  
+  if (!authorityWallet) {
+    return c.json({ error: 'Authority wallet not configured' }, 503);
+  }
+  
+  const deposits = loadPendingDeposits();
+  const deposit = deposits.find(d => d.betId === betId);
+  
+  if (!deposit) {
+    return c.json({ error: 'Bet not found', hint: 'Check your bet ID' }, 404);
+  }
+  
+  if (deposit.status !== 'placed') {
+    return c.json({
+      error: 'Bet not placed',
+      status: deposit.status,
+      hint: deposit.status === 'pending' ? 'Deposit not yet detected' : 'Bet was not successfully placed',
+    }, 400);
+  }
+  
+  try {
+    // Get market
+    const [marketPda] = PublicKey.findProgramAddressSync(
+      [Buffer.from('market'), Buffer.from(deposit.marketId)],
+      programId
+    );
+    const market = await program.account.market.fetch(marketPda) as MarketAccount;
+    
+    if (!market.resolved) {
+      return c.json({
+        error: 'Market not resolved yet',
+        market: deposit.marketId,
+        question: market.question,
+        resolutionTime: new Date(market.resolutionTime.toNumber() * 1000).toISOString(),
+        hint: 'Wait for market resolution before claiming',
+      }, 400);
+    }
+    
+    // Check if agent's bet won
+    const didWin = market.winningOutcome === deposit.outcomeIndex;
+    
+    if (!didWin) {
+      // Update deposit status
+      deposit.status = 'failed' as any; // Mark as lost
+      deposit.error = `Outcome ${deposit.outcomeIndex} lost. Winner: ${market.winningOutcome}`;
+      savePendingDeposits(deposits);
+      
+      return c.json({
+        won: false,
+        market: deposit.marketId,
+        yourOutcome: market.outcomes[deposit.outcomeIndex],
+        winningOutcome: market.outcomes[market.winningOutcome as number],
+        message: 'Sorry, your bet did not win.',
+      });
+    }
+    
+    // Get authority's position to see winnings
+    const [positionPda] = PublicKey.findProgramAddressSync(
+      [Buffer.from('position'), marketPda.toBuffer(), authorityWallet.publicKey.toBuffer()],
+      programId
+    );
+    
+    // Claim winnings to authority wallet first
+    const claimTx = await program.methods
+      .claimWinnings()
+      .accounts({
+        market: marketPda,
+        position: positionPda,
+        claimer: authorityWallet.publicKey,
+        systemProgram: SystemProgram.programId,
+      })
+      .signers([authorityWallet])
+      .rpc();
+    
+    console.log(`Claimed winnings for ${betId}: ${claimTx}`);
+    
+    // Calculate payout and transfer to agent
+    const totalPool = market.totalPool.toNumber();
+    const outcomePool = market.outcomePools[deposit.outcomeIndex].toNumber();
+    const shareOfOutcome = deposit.expectedAmountLamports / outcomePool;
+    const grossPayout = Math.floor(shareOfOutcome * totalPool);
+    const fee = Math.floor(grossPayout / 50); // 2% fee
+    const netPayout = grossPayout - fee;
+    
+    // Transfer to agent
+    const agentPubkey = new PublicKey(deposit.agentPubkey);
+    const transferIx = SystemProgram.transfer({
+      fromPubkey: authorityWallet.publicKey,
+      toPubkey: agentPubkey,
+      lamports: netPayout,
+    });
+    
+    const { blockhash } = await connection.getLatestBlockhash();
+    const transferTx = new (await import('@solana/web3.js')).Transaction({
+      recentBlockhash: blockhash,
+      feePayer: authorityWallet.publicKey,
+    }).add(transferIx);
+    
+    transferTx.sign(authorityWallet);
+    const transferSig = await connection.sendRawTransaction(transferTx.serialize());
+    await connection.confirmTransaction(transferSig, 'confirmed');
+    
+    console.log(`Transferred ${netPayout / LAMPORTS_PER_SOL} SOL to ${deposit.agentPubkey}: ${transferSig}`);
+    
+    // Update deposit status
+    (deposit as any).claimTx = claimTx;
+    (deposit as any).transferTx = transferSig;
+    (deposit as any).payout = netPayout;
+    savePendingDeposits(deposits);
+    
+    return c.json({
+      won: true,
+      market: deposit.marketId,
+      outcome: market.outcomes[deposit.outcomeIndex],
+      payout: `${(netPayout / LAMPORTS_PER_SOL).toFixed(4)} SOL`,
+      payoutLamports: netPayout,
+      transferredTo: deposit.agentPubkey,
+      claimTx,
+      transferTx: transferSig,
+      explorerUrl: `https://explorer.solana.com/tx/${transferSig}?cluster=devnet`,
+    });
+    
+  } catch (error) {
+    console.error(`Error claiming ${betId}:`, error);
+    return c.json({ error: String(error) }, 500);
+  }
 });
 
 // === Quick Bet Endpoint ===
