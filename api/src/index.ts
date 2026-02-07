@@ -123,6 +123,107 @@ async function triggerWebhooks(event: WebhookEvent, payload: Record<string, unkn
   saveWebhooks(webhooks);
 }
 
+// === On-Chain Oracle System ===
+// Trustless resolution via direct PDA reads - no API, no trust needed
+
+interface OnChainOracle {
+  programId: string;
+  pdaSeeds: string[];  // Seeds to derive the PDA
+  field: string;       // Field to read from account data
+  threshold?: number;  // For "greater than" comparisons
+  comparison: 'gt' | 'lt' | 'eq' | 'gte' | 'lte';
+  yesOutcome: number;  // Which outcome index = "yes"/true
+  noOutcome: number;   // Which outcome index = "no"/false
+}
+
+// Registered on-chain oracles for markets
+const ON_CHAIN_ORACLES: Record<string, OnChainOracle> = {
+  'agent-casino-100-games': {
+    programId: '5bo6H5rnN9nn8fud6d1pJHmSZ8bpowtQj18SGXG93zvV',
+    pdaSeeds: ['state'],  // Agent Casino global state PDA
+    field: 'totalGames',
+    threshold: 100,
+    comparison: 'gt',
+    yesOutcome: 0,
+    noOutcome: 1,
+  },
+  'agent-casino-50-games': {
+    programId: '5bo6H5rnN9nn8fud6d1pJHmSZ8bpowtQj18SGXG93zvV',
+    pdaSeeds: ['state'],
+    field: 'totalGames',
+    threshold: 50,
+    comparison: 'gt',
+    yesOutcome: 0,
+    noOutcome: 1,
+  },
+};
+
+// Read raw PDA account data and extract u64/u32 values
+async function readOnChainOracleValue(oracle: OnChainOracle): Promise<{ value: number; raw: Buffer } | null> {
+  try {
+    const oracleProgramId = new PublicKey(oracle.programId);
+    const seeds = oracle.pdaSeeds.map(s => Buffer.from(s));
+    const [pda] = PublicKey.findProgramAddressSync(seeds, oracleProgramId);
+    
+    const accountInfo = await connection.getAccountInfo(pda);
+    if (!accountInfo) {
+      console.log(`On-chain oracle PDA not found: ${pda.toBase58()}`);
+      return null;
+    }
+    
+    // Parse account data - Agent Casino uses Anchor, so skip 8-byte discriminator
+    const data = accountInfo.data;
+    
+    // For Agent Casino state, totalGames is typically a u64 after the discriminator
+    // Structure: [8-byte discriminator][authority: 32 bytes][totalGames: 8 bytes (u64)]
+    // Adjust offset based on actual Agent Casino IDL
+    const DISCRIMINATOR_SIZE = 8;
+    const AUTHORITY_SIZE = 32;
+    const offset = DISCRIMINATOR_SIZE + AUTHORITY_SIZE;
+    
+    if (data.length < offset + 8) {
+      console.log(`On-chain oracle data too short: ${data.length} bytes`);
+      return null;
+    }
+    
+    // Read u64 (little endian)
+    const value = Number(data.readBigUInt64LE(offset));
+    
+    return { value, raw: data };
+  } catch (e) {
+    console.error('On-chain oracle read error:', e);
+    return null;
+  }
+}
+
+// Resolve market using on-chain oracle
+async function resolveViaOnChainOracle(marketId: string): Promise<{ outcome: number; value: number; threshold: number } | null> {
+  const oracle = ON_CHAIN_ORACLES[marketId];
+  if (!oracle) return null;
+  
+  const result = await readOnChainOracleValue(oracle);
+  if (!result) return null;
+  
+  const { value } = result;
+  const threshold = oracle.threshold ?? 0;
+  
+  let conditionMet: boolean;
+  switch (oracle.comparison) {
+    case 'gt': conditionMet = value > threshold; break;
+    case 'gte': conditionMet = value >= threshold; break;
+    case 'lt': conditionMet = value < threshold; break;
+    case 'lte': conditionMet = value <= threshold; break;
+    case 'eq': conditionMet = value === threshold; break;
+    default: conditionMet = false;
+  }
+  
+  return {
+    outcome: conditionMet ? oracle.yesOutcome : oracle.noOutcome,
+    value,
+    threshold,
+  };
+}
+
 function loadDisputes(): Record<string, Dispute[]> {
   try {
     if (existsSync(DISPUTES_FILE)) {
@@ -305,6 +406,10 @@ app.get('/', (c) => {
       
       // Wallet Authority Integrations — Enable autonomous agent betting
       'POST /markets/:id/bet/paladin': '🤖 Bet via Paladin wallet delegation (bounded authority)',
+      
+      // On-Chain Oracles — Trustless resolution via PDA reads
+      'GET /oracles': '🔗 List registered on-chain oracles (trustless resolution)',
+      'GET /oracles/:marketId': '🔗 Check oracle status and current value for a market',
       
       // Webhooks — Real-time notifications
       'POST /webhooks': '🔔 Register a webhook for market events',
@@ -1504,14 +1609,85 @@ app.post('/markets/:id/auto-resolve', async (c) => {
     // Auto-resolve verifiable markets
     const isSubmissionsMarket = marketIdStr === 'submissions-over-400' || marketIdStr === 'submissions-over-350';
     const isTestMarket = marketIdStr.startsWith('fresh-test-') || marketIdStr.startsWith('hackathon-test-');
+    const hasOnChainOracle = ON_CHAIN_ORACLES[marketIdStr] !== undefined;
     
-    if (!isSubmissionsMarket && !isTestMarket) {
+    if (!isSubmissionsMarket && !isTestMarket && !hasOnChainOracle) {
       return c.json({ 
         error: 'Auto-resolution only available for verifiable markets',
         marketId: marketIdStr,
-        verifiableMarkets: ['submissions-over-400', 'submissions-over-350', 'fresh-test-*'],
+        verifiableMarkets: [
+          'submissions-over-400', 
+          'submissions-over-350', 
+          'fresh-test-*',
+          ...Object.keys(ON_CHAIN_ORACLES),
+        ],
         note: 'Other markets require manual resolution after hackathon results.',
       }, 400);
+    }
+    
+    // === On-Chain Oracle Resolution (Trustless!) ===
+    if (hasOnChainOracle) {
+      const oracleResult = await resolveViaOnChainOracle(marketIdStr);
+      
+      if (!oracleResult) {
+        const oracle = ON_CHAIN_ORACLES[marketIdStr];
+        return c.json({
+          error: 'Failed to read on-chain oracle data',
+          oracleProgram: oracle.programId,
+          pdaSeeds: oracle.pdaSeeds,
+          message: 'The oracle program PDA may not exist yet or data format is unexpected.',
+        }, 503);
+      }
+      
+      const { outcome, value, threshold } = oracleResult;
+      const oracle = ON_CHAIN_ORACLES[marketIdStr];
+      const winningOutcomeName = market.outcomes[outcome];
+      
+      // Execute resolution
+      const tx = await program.methods
+        .resolveMarket(outcome)
+        .accounts({
+          market: marketPubkey,
+          authority: authorityWallet.publicKey,
+        })
+        .signers([authorityWallet])
+        .rpc();
+      
+      // Trigger webhooks
+      await triggerWebhooks('resolution', {
+        marketId: marketIdStr,
+        winningOutcome: outcome,
+        winningOutcomeName,
+        oracleType: 'on-chain',
+        oracleProgram: oracle.programId,
+        oracleValue: value,
+        threshold,
+      });
+      
+      console.log(`On-chain oracle resolved ${marketIdStr}: ${winningOutcomeName} (value: ${value}, threshold: ${threshold})`);
+      
+      return c.json({
+        success: true,
+        marketId: marketIdStr,
+        resolution: {
+          winningOutcome: outcome,
+          winningOutcomeName,
+          reason: `On-chain value (${value}) ${oracle.comparison} threshold (${threshold})`,
+        },
+        verification: {
+          oracleType: 'on-chain',
+          oracleProgram: oracle.programId,
+          pdaSeeds: oracle.pdaSeeds,
+          field: oracle.field,
+          value,
+          threshold,
+          comparison: oracle.comparison,
+          trustLevel: 'TRUSTLESS — Anyone can verify by reading the PDA directly',
+          note: 'Resolution determined by on-chain data, not API calls',
+        },
+        txSignature: tx,
+        message: 'Market resolved via on-chain oracle. Anyone can claim winnings.',
+      });
     }
     
     // Handle test markets (always resolve to Yes - outcome 0)
@@ -1929,6 +2105,112 @@ app.get('/verify-all', async (c) => {
       message: 'You can verify manually via Solana Explorer',
     }, 500);
   }
+});
+
+// === On-Chain Oracle Endpoints ===
+// Trustless resolution via direct PDA reads - no API, no trust
+
+// List all registered on-chain oracles
+app.get('/oracles', async (c) => {
+  const oracles = Object.entries(ON_CHAIN_ORACLES).map(([marketId, oracle]) => ({
+    marketId,
+    programId: oracle.programId,
+    pdaSeeds: oracle.pdaSeeds,
+    field: oracle.field,
+    threshold: oracle.threshold,
+    comparison: oracle.comparison,
+    outcomes: {
+      yes: oracle.yesOutcome,
+      no: oracle.noOutcome,
+    },
+  }));
+  
+  return c.json({
+    oracles,
+    count: oracles.length,
+    trustLevel: 'TRUSTLESS — Resolution determined by on-chain PDA data',
+    verificationNote: 'Anyone can verify by reading the PDA directly from the Solana blockchain',
+  });
+});
+
+// Check oracle status for a specific market
+app.get('/oracles/:marketId', async (c) => {
+  const marketId = c.req.param('marketId');
+  const oracle = ON_CHAIN_ORACLES[marketId];
+  
+  if (!oracle) {
+    return c.json({
+      error: 'No on-chain oracle registered for this market',
+      marketId,
+      registeredOracles: Object.keys(ON_CHAIN_ORACLES),
+    }, 404);
+  }
+  
+  // Try to read current oracle value
+  const result = await readOnChainOracleValue(oracle);
+  
+  if (!result) {
+    // PDA doesn't exist yet or data format unexpected
+    const oracleProgramId = new PublicKey(oracle.programId);
+    const seeds = oracle.pdaSeeds.map(s => Buffer.from(s));
+    const [pda] = PublicKey.findProgramAddressSync(seeds, oracleProgramId);
+    
+    return c.json({
+      marketId,
+      oracle: {
+        programId: oracle.programId,
+        pdaSeeds: oracle.pdaSeeds,
+        pdaAddress: pda.toBase58(),
+        field: oracle.field,
+        threshold: oracle.threshold,
+        comparison: oracle.comparison,
+      },
+      status: 'PENDING',
+      message: 'Oracle PDA not found or data format unexpected. The program may not have initialized state yet.',
+      explorerUrl: `https://explorer.solana.com/address/${pda.toBase58()}?cluster=devnet`,
+    });
+  }
+  
+  // PDA exists, show current value and what resolution would be
+  const { value } = result;
+  const threshold = oracle.threshold ?? 0;
+  
+  let conditionMet: boolean;
+  let comparisonStr: string;
+  switch (oracle.comparison) {
+    case 'gt': conditionMet = value > threshold; comparisonStr = '>'; break;
+    case 'gte': conditionMet = value >= threshold; comparisonStr = '>='; break;
+    case 'lt': conditionMet = value < threshold; comparisonStr = '<'; break;
+    case 'lte': conditionMet = value <= threshold; comparisonStr = '<='; break;
+    case 'eq': conditionMet = value === threshold; comparisonStr = '=='; break;
+    default: conditionMet = false; comparisonStr = '?';
+  }
+  
+  const oracleProgramId = new PublicKey(oracle.programId);
+  const seeds = oracle.pdaSeeds.map(s => Buffer.from(s));
+  const [pda] = PublicKey.findProgramAddressSync(seeds, oracleProgramId);
+  
+  return c.json({
+    marketId,
+    oracle: {
+      programId: oracle.programId,
+      pdaSeeds: oracle.pdaSeeds,
+      pdaAddress: pda.toBase58(),
+      field: oracle.field,
+      threshold: oracle.threshold,
+      comparison: oracle.comparison,
+    },
+    status: 'LIVE',
+    currentValue: value,
+    threshold,
+    condition: `${value} ${comparisonStr} ${threshold}`,
+    conditionMet,
+    projectedOutcome: conditionMet ? oracle.yesOutcome : oracle.noOutcome,
+    projectedOutcomeName: conditionMet ? 'Yes' : 'No',
+    trustLevel: 'TRUSTLESS — Value read directly from on-chain PDA',
+    explorerUrl: `https://explorer.solana.com/address/${pda.toBase58()}?cluster=devnet`,
+    verifyYourself: `Read account ${pda.toBase58()} and check ${oracle.field} field`,
+  });
 });
 
 // === Opportunities Endpoint ===
