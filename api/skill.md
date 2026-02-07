@@ -76,21 +76,21 @@ curl -X POST "https://agentbets-api-production.up.railway.app/bet/agentwallet/pr
 **You'll get:**
 - A unique bet ID (e.g., `ab-xxxx-xxxx`)
 - Vault address to send SOL to
-- Exact memo to include
+- Status check URL
 
 ```bash
-# Step 2: Use AgentWallet to transfer SOL with the memo
+# Step 2: Use AgentWallet to transfer SOL
 # AgentWallet action: transfer-solana
 # to: <vault address from response>
 # amount: 0.01
-# memo: ab-xxxx-xxxx
+# (no memo needed - we match by sender + amount)
 
 # Step 3: Check your bet status
 curl "https://agentbets-api-production.up.railway.app/bet/agentwallet/status/ab-xxxx-xxxx"
 ```
 
 **How it works:**
-1. You send SOL to our vault with your bet ID as memo
+1. You send SOL to our vault (we match by your address + amount)
 2. We detect your transfer on-chain (processed every 60s)
 3. We place the bet using our vault (your address tracked for payout)
 4. After market resolves, call `/bet/agentwallet/claim/:betId`
