@@ -1038,8 +1038,8 @@ app.post('/bet/agentwallet/prepare', async (c) => {
       whatHappensNext: [
         `1. You send ${sol} SOL to ${vaultAddress} with memo "${betId}"`,
         '2. We detect your transfer on-chain (checking every 30s)',
-        '3. We place the bet on your behalf with YOUR address as beneficiary',
-        '4. If you win, winnings go directly to your AgentWallet address',
+        '3. We place the bet using our vault (your address tracked for payout)',
+        '4. If you win, we transfer winnings to your AgentWallet address',
       ],
       
       // Bet details
@@ -1199,25 +1199,24 @@ app.post('/bet/agentwallet/process', async (c) => {
                 programId
               );
               
-              // Derive position PDA (for the agent, not us)
+              // Use authority wallet as buyer (we control it)
+              // Agent is tracked as beneficiary off-chain - winnings transferred on claim
               const [positionPda] = PublicKey.findProgramAddressSync(
-                [Buffer.from('position'), marketPda.toBuffer(), agent.toBuffer()],
+                [Buffer.from('position'), marketPda.toBuffer(), authorityWallet!.publicKey.toBuffer()],
                 programId
               );
               
-              // Place bet with authority, but position belongs to agent
-              // Note: The Solana program needs to support this pattern
-              // For now, we place using authority and track beneficiary off-chain
+              // Place bet with authority wallet (we pay, we sign)
+              // Agent's address is stored in deposit.agentPubkey for payout
               const betTx = await program.methods
                 .buyShares(deposit.outcomeIndex, new BN(deposit.expectedAmountLamports))
                 .accounts({
                   market: marketPda,
                   position: positionPda,
-                  buyer: agent, // Beneficiary is the agent
+                  buyer: authorityWallet!.publicKey, // Authority places bet
                   systemProgram: SystemProgram.programId,
                 })
-                // Note: This would fail without agent signature
-                // Need to modify to use authority as payer but agent as beneficiary
+                .signers([authorityWallet!])
                 .rpc();
               
               deposit.status = 'placed';
