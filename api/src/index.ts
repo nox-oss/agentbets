@@ -313,11 +313,17 @@ const fixedIdl = { ...idl, address: DEVNET_PROGRAM_ID };
 // @ts-ignore - Anchor dynamic IDL typing
 const program = new Program(fixedIdl as any, provider) as any;
 
+// === Analytics ===
+import { analyticsMiddleware, getFunnelSummary } from './analytics.js';
+
 // === Hono App ===
 const app = new Hono();
 
 // Enable CORS for all origins (agents calling from anywhere)
 app.use('*', cors());
+
+// Analytics middleware - track all requests
+app.use('*', analyticsMiddleware());
 
 // Ensure UTF-8 charset on all JSON responses
 app.use('*', async (c, next) => {
@@ -3087,6 +3093,25 @@ app.get('/security', async (c) => {
     
     recommendation: 'Start with small bets on auto-resolvable markets (submissions-over-*, fresh-test-*). Once you see correct resolution, consider larger bets on other markets.',
     
+    timestamp: new Date().toISOString(),
+  });
+});
+
+// === Analytics ===
+app.get('/analytics', async (c) => {
+  const funnel = getFunnelSummary();
+  
+  return c.json({
+    title: 'AgentBets Conversion Funnel',
+    description: 'Tracking agent engagement from discovery to betting',
+    funnel,
+    interpretation: {
+      skillMdViews: 'Agents who discovered our skill.md',
+      marketsViews: 'Agents who browsed available markets',
+      prepareAttempts: 'Agents who initiated the AgentWallet betting flow',
+      betsPlaced: 'Agents who completed a bet via AgentWallet',
+      conversionRate: 'skillMd → bets conversion',
+    },
     timestamp: new Date().toISOString(),
   });
 });
