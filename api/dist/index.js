@@ -1,7 +1,7 @@
 import { serve } from '@hono/node-server';
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
-import { Connection, PublicKey, Keypair, SystemProgram, LAMPORTS_PER_SOL } from '@solana/web3.js';
+import { Connection, PublicKey, Keypair, SystemProgram, LAMPORTS_PER_SOL, Transaction } from '@solana/web3.js';
 import { Program, AnchorProvider, Wallet, setProvider } from '@coral-xyz/anchor';
 import BN from 'bn.js';
 import * as bs58 from 'bs58';
@@ -134,7 +134,7 @@ app.get('/', (c) => {
     c.header('Content-Type', 'application/json; charset=utf-8');
     return c.json({
         name: 'AgentBets API',
-        version: '0.1.0',
+        version: '0.1.1',
         network: 'devnet',
         programId: DEVNET_PROGRAM_ID,
         endpoints: {
@@ -1333,6 +1333,139 @@ app.get('/security', async (c) => {
         keyInsight: 'We designed the program with no admin privileges over funds. The only power the authority has is resolving markets - and we\'ve eliminated even that for verifiable markets via auto-resolution.',
         recommendation: 'Start with small bets on auto-resolvable markets (submissions-over-*, fresh-test-*). Once you see correct resolution, consider larger bets on other markets.',
         timestamp: new Date().toISOString(),
+    });
+});
+// ===========================================
+// Faucet - Remove friction for first bets
+// ===========================================
+const FAUCET_FILE = process.env.FAUCET_FILE || './faucet-claims.json';
+const FAUCET_AMOUNT = 0.02 * LAMPORTS_PER_SOL; // 0.02 SOL per agent
+const FAUCET_MAX_TOTAL = 1 * LAMPORTS_PER_SOL; // 1 SOL max total faucet spend
+function loadFaucetClaims() {
+    try {
+        if (existsSync(FAUCET_FILE)) {
+            return JSON.parse(readFileSync(FAUCET_FILE, 'utf-8'));
+        }
+    }
+    catch (e) {
+        console.error('Failed to load faucet claims:', e);
+    }
+    return {};
+}
+function saveFaucetClaims(claims) {
+    try {
+        writeFileSync(FAUCET_FILE, JSON.stringify(claims, null, 2));
+    }
+    catch (e) {
+        console.error('Failed to save faucet claims:', e);
+    }
+}
+// POST /faucet - Get free devnet SOL for your first bet
+app.post('/faucet', async (c) => {
+    if (!authorityWallet) {
+        return c.json({ error: 'Faucet not available - authority wallet not configured' }, 503);
+    }
+    try {
+        const body = await c.req.json();
+        const { walletPubkey, agentId } = body;
+        if (!walletPubkey) {
+            return c.json({ error: 'Missing required field: walletPubkey' }, 400);
+        }
+        // Validate pubkey
+        let recipientPubkey;
+        try {
+            recipientPubkey = new PublicKey(walletPubkey);
+        }
+        catch {
+            return c.json({ error: 'Invalid wallet public key' }, 400);
+        }
+        // Check if already claimed
+        const claims = loadFaucetClaims();
+        if (claims[walletPubkey]) {
+            return c.json({
+                error: 'Faucet already claimed for this wallet',
+                claimedAt: claims[walletPubkey].claimedAt,
+                txSignature: claims[walletPubkey].txSignature,
+            }, 400);
+        }
+        // Check total faucet spend
+        const totalClaimed = Object.keys(claims).length * FAUCET_AMOUNT;
+        if (totalClaimed >= FAUCET_MAX_TOTAL) {
+            return c.json({
+                error: 'Faucet depleted - max total spend reached',
+                totalClaimed: totalClaimed / LAMPORTS_PER_SOL,
+                maxTotal: FAUCET_MAX_TOTAL / LAMPORTS_PER_SOL,
+            }, 400);
+        }
+        // Check authority wallet balance
+        const balance = await connection.getBalance(authorityWallet.publicKey);
+        if (balance < FAUCET_AMOUNT + 5000) { // 5000 lamports for tx fee
+            return c.json({
+                error: 'Faucet wallet low on funds',
+                balance: balance / LAMPORTS_PER_SOL,
+            }, 503);
+        }
+        // Optional: Verify agent is hackathon participant
+        if (agentId) {
+            try {
+                const agentRes = await fetch(`https://agents.colosseum.com/api/agents/${agentId}`);
+                if (!agentRes.ok) {
+                    console.log(`Agent ${agentId} not found in hackathon, but allowing faucet claim anyway`);
+                }
+            }
+            catch (e) {
+                console.log('Could not verify agent, allowing claim anyway:', e);
+            }
+        }
+        // Send SOL
+        const transaction = new Transaction().add(SystemProgram.transfer({
+            fromPubkey: authorityWallet.publicKey,
+            toPubkey: recipientPubkey,
+            lamports: FAUCET_AMOUNT,
+        }));
+        const txSignature = await connection.sendTransaction(transaction, [authorityWallet]);
+        await connection.confirmTransaction(txSignature, 'confirmed');
+        // Record claim
+        claims[walletPubkey] = {
+            claimedAt: new Date().toISOString(),
+            txSignature,
+        };
+        saveFaucetClaims(claims);
+        console.log(`Faucet: Sent ${FAUCET_AMOUNT / LAMPORTS_PER_SOL} SOL to ${walletPubkey} (tx: ${txSignature})`);
+        return c.json({
+            success: true,
+            amount: FAUCET_AMOUNT / LAMPORTS_PER_SOL,
+            txSignature,
+            message: `Sent ${FAUCET_AMOUNT / LAMPORTS_PER_SOL} SOL to ${walletPubkey}. Now go place a bet!`,
+            nextStep: 'POST /markets/{marketId}/bet with your wallet',
+        });
+    }
+    catch (error) {
+        console.error('Faucet error:', error);
+        return c.json({ error: 'Faucet transfer failed: ' + String(error) }, 500);
+    }
+});
+// GET /faucet/status - Check faucet status
+app.get('/faucet/status', async (c) => {
+    const claims = loadFaucetClaims();
+    const totalClaimed = Object.keys(claims).length * FAUCET_AMOUNT;
+    let walletBalance = 0;
+    if (authorityWallet) {
+        try {
+            walletBalance = await connection.getBalance(authorityWallet.publicKey);
+        }
+        catch (e) {
+            console.error('Failed to get wallet balance:', e);
+        }
+    }
+    return c.json({
+        available: authorityWallet !== null && totalClaimed < FAUCET_MAX_TOTAL,
+        amountPerClaim: FAUCET_AMOUNT / LAMPORTS_PER_SOL,
+        totalClaimed: totalClaimed / LAMPORTS_PER_SOL,
+        maxTotal: FAUCET_MAX_TOTAL / LAMPORTS_PER_SOL,
+        claimsCount: Object.keys(claims).length,
+        walletBalance: walletBalance / LAMPORTS_PER_SOL,
+        remaining: Math.max(0, (FAUCET_MAX_TOTAL - totalClaimed)) / LAMPORTS_PER_SOL,
     });
 });
 // List all CLOB markets
