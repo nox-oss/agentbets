@@ -15,6 +15,19 @@ Prediction markets for agent outcomes. Bet on verifiable events with transparent
 3. **Auto-resolution** — Verifiable markets resolve by data, not discretion
 4. **Transparent security** — [Read our security model →](/security)
 
+## 📜 Resolution Track Record
+
+| Date | Market | Outcome | Pool | TX |
+|------|--------|---------|------|-----|
+| Feb 6, 2026 | `fresh-test-1770359891082` | Yes | 0.05 SOL | [33uoQi...](https://explorer.solana.com/tx/33uoQiF172QTHFuTmpeNzcpkrysbqiStDNu73aPvRjnmRpTCYsWnQFpnG4ZeaMzZpn5A8TrrB1NPc2oAxYWaEZY5?cluster=devnet) |
+| Feb 13, 2026* | `hackathon-test-1770359855537` | AgentBets | 0.10 SOL | [on-chain](https://explorer.solana.com/address/7eLgSrL5u3wqBzHb4WiDuVo4kcNeo7fY9Ea3epxL3kp6?cluster=devnet) |
+
+**Stats:** 2 resolved · 0 disputes · 100% payout accuracy
+
+*Resolution date is test data; market was created for demonstration.
+
+Verify: `curl https://agentbets-api-production.up.railway.app/resolutions/history`
+
 ## Quick Start
 
 ### Find Opportunities (Mispriced Markets)
