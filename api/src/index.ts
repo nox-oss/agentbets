@@ -296,6 +296,7 @@ app.get('/', (c) => {
       'GET /skill.md': '📖 Skill file for agent discovery (markdown)',
       'POST /markets': 'Create a new parimutuel market (authority only)',
       'GET /markets/:id/simulate': '🔮 Preview bet payout before committing (no risk, just info)',
+      'POST /quick-bet': '⚡ Quick bet: accepts outcome by name, amount in SOL — simplest way to bet',
       'POST /markets/:id/bet': 'Place a bet (returns unsigned tx to sign)',
       'POST /markets/:id/claim': 'Claim winnings after resolution (returns unsigned tx)',
       'POST /markets/:id/dispute': '⚖️ File a dispute against a resolution (24h challenge window)',
@@ -699,6 +700,203 @@ app.post('/markets/:id/bet/paladin', async (c) => {
   } catch (error) {
     console.error('Error in Paladin bet:', error);
     return c.json({ error: String(error) }, 500);
+  }
+});
+
+// === Quick Bet Endpoint ===
+// Simplified betting for agents - accepts outcome by name, amount in SOL
+app.post('/quick-bet', async (c) => {
+  try {
+    const body = await c.req.json();
+    const { market, outcome, sol, pubkey, signedTx } = body;
+    
+    // Validate required fields with helpful errors
+    if (!market) {
+      return c.json({
+        error: 'Missing market',
+        hint: 'Provide market ID or slug from /markets endpoint',
+        example: { market: 'submissions-over-400', outcome: 'Yes', sol: 0.01, pubkey: 'YOUR_PUBKEY' },
+        getMarkets: 'GET /markets',
+      }, 400);
+    }
+    
+    if (!outcome) {
+      return c.json({
+        error: 'Missing outcome',
+        hint: 'What are you betting on? Use outcome name like "Yes" or "No"',
+        example: { market, outcome: 'Yes', sol: 0.01, pubkey: 'YOUR_PUBKEY' },
+      }, 400);
+    }
+    
+    if (!sol && !signedTx) {
+      return c.json({
+        error: 'Missing sol amount',
+        hint: 'How much SOL to bet? (e.g., 0.01)',
+        example: { market, outcome, sol: 0.01, pubkey: 'YOUR_PUBKEY' },
+        minBet: '0.001 SOL',
+      }, 400);
+    }
+    
+    if (!pubkey && !signedTx) {
+      return c.json({
+        error: 'Missing pubkey',
+        hint: 'Your Solana wallet public key',
+        example: { market, outcome, sol, pubkey: 'Ensa3bMUnd...' },
+      }, 400);
+    }
+    
+    // If signed tx provided, submit it directly
+    if (signedTx) {
+      const txBuffer = Buffer.from(signedTx, 'base64');
+      const sig = await connection.sendRawTransaction(txBuffer);
+      await connection.confirmTransaction(sig, 'confirmed');
+      
+      triggerWebhooks('bet', {
+        marketId: market,
+        txSignature: sig,
+        viaEndpoint: 'quick-bet',
+        explorerUrl: `https://explorer.solana.com/tx/${sig}?cluster=devnet`,
+      }).catch(e => console.error('Quick-bet webhook failed:', e));
+      
+      return c.json({
+        success: true,
+        txSignature: sig,
+        explorerUrl: `https://explorer.solana.com/tx/${sig}?cluster=devnet`,
+      });
+    }
+    
+    // Find market
+    let marketPubkey: PublicKey;
+    let marketData: MarketAccount;
+    
+    try {
+      // Try as pubkey first
+      try {
+        marketPubkey = new PublicKey(market);
+        marketData = await program.account.market.fetch(marketPubkey) as MarketAccount;
+      } catch {
+        // Try as slug
+        const [pda] = PublicKey.findProgramAddressSync(
+          [Buffer.from('market'), Buffer.from(market)],
+          programId
+        );
+        marketPubkey = pda;
+        marketData = await program.account.market.fetch(marketPubkey) as MarketAccount;
+      }
+    } catch {
+      // List available markets
+      const allMarkets = await program.account.market.all();
+      const active = allMarkets
+        .filter((m: any) => !m.account.resolved)
+        .map((m: any) => ({
+          id: m.account.marketId,
+          question: m.account.question.substring(0, 50) + '...',
+        }));
+      
+      return c.json({
+        error: `Market "${market}" not found`,
+        hint: 'Use market ID from the list below',
+        activeMarkets: active.slice(0, 5),
+        getAll: 'GET /markets',
+      }, 404);
+    }
+    
+    // Check if market is open
+    if (marketData.resolved) {
+      return c.json({
+        error: 'Market already resolved',
+        winner: marketData.outcomes[marketData.winningOutcome as number],
+        hint: 'Check /markets for active markets',
+      }, 400);
+    }
+    
+    // Find outcome index by name
+    const outcomeNames = marketData.outcomes.map((o: string) => o.toLowerCase());
+    const outcomeIndex = outcomeNames.indexOf(outcome.toLowerCase());
+    
+    if (outcomeIndex === -1) {
+      return c.json({
+        error: `Outcome "${outcome}" not found`,
+        validOutcomes: marketData.outcomes,
+        hint: `Use one of: ${marketData.outcomes.join(', ')}`,
+        example: { market, outcome: marketData.outcomes[0], sol, pubkey },
+      }, 400);
+    }
+    
+    // Convert SOL to lamports
+    const amount = Math.floor(sol * LAMPORTS_PER_SOL);
+    if (amount < 1000000) { // 0.001 SOL minimum
+      return c.json({
+        error: 'Bet too small',
+        minimum: '0.001 SOL',
+        yourBet: `${sol} SOL`,
+        hint: 'Increase your bet amount',
+      }, 400);
+    }
+    
+    // Build unsigned tx
+    const buyer = new PublicKey(pubkey);
+    const [positionPda] = PublicKey.findProgramAddressSync(
+      [Buffer.from('position'), marketPubkey.toBuffer(), buyer.toBuffer()],
+      programId
+    );
+    
+    const ix = await program.methods
+      .buyShares(outcomeIndex, new BN(amount))
+      .accounts({
+        market: marketPubkey,
+        position: positionPda,
+        buyer,
+        systemProgram: SystemProgram.programId,
+      })
+      .instruction();
+    
+    const { blockhash } = await connection.getLatestBlockhash();
+    const tx = new (await import('@solana/web3.js')).Transaction({
+      recentBlockhash: blockhash,
+      feePayer: buyer,
+    }).add(ix);
+    
+    const serialized = tx.serialize({
+      requireAllSignatures: false,
+      verifySignatures: false,
+    }).toString('base64');
+    
+    // Calculate expected payout
+    const currentPool = marketData.outcomePools[outcomeIndex].toNumber();
+    const totalPool = marketData.totalPool.toNumber();
+    const newPool = totalPool + amount;
+    const newOutcomePool = currentPool + amount;
+    const shareOfOutcome = amount / newOutcomePool;
+    const payout = Math.floor(shareOfOutcome * newPool);
+    const profit = payout - amount;
+    
+    return c.json({
+      status: 'ready',
+      bet: {
+        market: marketData.marketId,
+        question: marketData.question,
+        outcome: marketData.outcomes[outcomeIndex],
+        amount: `${sol} SOL`,
+        amountLamports: amount,
+      },
+      projection: {
+        potentialPayout: `${(payout / LAMPORTS_PER_SOL).toFixed(4)} SOL`,
+        potentialProfit: `${(profit / LAMPORTS_PER_SOL).toFixed(4)} SOL`,
+        impliedOdds: `${((currentPool / totalPool) * 100).toFixed(1)}%`,
+      },
+      unsignedTx: serialized,
+      nextStep: 'Sign with your wallet, then POST to /quick-bet with signedTx',
+      claimAfterWin: `POST /markets/${marketData.marketId}/claim`,
+    });
+    
+  } catch (error) {
+    console.error('Error in quick-bet:', error);
+    return c.json({
+      error: 'Unexpected error',
+      details: String(error),
+      help: 'Check your request format and try again',
+    }, 500);
   }
 });
 

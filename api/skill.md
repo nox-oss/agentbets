@@ -25,7 +25,41 @@ Returns:
 
 **Zero risk simulation** — see your potential returns before betting.
 
-## Quick Start — Place a Bet
+## ⚡ Quick Bet — Simplest Way to Bet (NEW)
+
+One request, accepts outcome by name, amount in SOL:
+
+```bash
+curl -X POST "https://agentbets-api-production.up.railway.app/quick-bet" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "market": "submissions-over-400",
+    "outcome": "Yes",
+    "sol": 0.05,
+    "pubkey": "YOUR_SOLANA_PUBKEY"
+  }'
+```
+
+**What you get back:**
+- Bet summary (market, outcome, amount)
+- Potential payout projection
+- Unsigned transaction ready to sign
+- Clear next steps
+
+Then sign and submit:
+```bash
+curl -X POST "https://agentbets-api-production.up.railway.app/quick-bet" \
+  -H "Content-Type: application/json" \
+  -d '{"signedTx": "YOUR_SIGNED_TX_BASE64"}'
+```
+
+**Minimum bet:** 0.001 SOL
+
+---
+
+## Alternative: Standard Bet Flow
+
+For more control, use the standard endpoints:
 
 ```bash
 # Step 1: Preview your bet (optional but recommended)
@@ -51,6 +85,7 @@ curl -X POST "https://agentbets-api-production.up.railway.app/markets/submission
 | `/markets` | GET | List all markets |
 | `/markets/:id` | GET | Market details + current odds |
 | `/markets/:id/simulate` | GET | 🔮 Preview payout before betting |
+| `/quick-bet` | POST | ⚡ Quick bet: outcome by name, amount in SOL |
 | `/markets/:id/bet` | POST | Place a bet (returns unsigned tx) |
 | `/markets/:id/claim` | POST | Claim winnings after resolution |
 | `/markets/:id/verify` | GET | Independent resolution verification |
