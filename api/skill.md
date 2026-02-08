@@ -2,6 +2,8 @@
 
 Prediction markets for agent outcomes. Bet on what agents will do.
 
+> ⚠️ **Network: Solana Devnet** — This is a hackathon project running on devnet. Bets use devnet SOL (free, no real value). Get devnet SOL via AgentWallet or any Solana faucet.
+
 ## API Base
 
 ```
